@@ -15,7 +15,7 @@ class mmaxgon_MINLP_POA:
 		non_lin_constr_fun,            # Нелинейные ограничения (list)
 		decision_vars_to_vector_fun,   # Функция, комбинирующая переменные решения Pyomo в list
 		eps=1e-6,                      # Приращение аргумента для численного дифференцирования
-	    solver="cbc"                   # Солвер
+		milp_solver="cbc"                   # Солвер
 	  ):
 		self.__pyomo = pyomo
 		self.__pyomo_MILP_model = pyomo_MILP_model
@@ -23,7 +23,7 @@ class mmaxgon_MINLP_POA:
 		self.__non_lin_constr_fun = non_lin_constr_fun
 		self.__decision_vars_to_vector_fun = decision_vars_to_vector_fun
 		self.__eps = eps
-		self.__solver = solver
+		self.__milp_solver = milp_solver
 
 		if self.__non_lin_constr_fun == None:
 			self.__non_lin_constr_fun = self.__constr_true
@@ -80,7 +80,7 @@ class mmaxgon_MINLP_POA:
 			pyomo_MILP_model.obj = self.__pyomo.Objective(expr=pyomo_MILP_model.__mu, sense=self.__pyomo.minimize)
 
 		# солвер
-		solver = self.__pyomo.SolverFactory(self.__solver)
+		solver = self.__pyomo.SolverFactory(self.__milp_solver)
 
 		while True:
 			iter_num += 1
@@ -225,7 +225,9 @@ s.t. c1: 8*x[1] + 14*x[2] + 7*x[3] - 56 = 0;
 s.t. c2: x[1]^2 + x[2]^2 + x[3]^2 - 25 <= 0;
 c3: x[2]^2 + x[3]^2 <= 12;	
 '''
+##############################################################################
 # Задача как MILP
+##############################################################################
 model_milp = pyomo.ConcreteModel()
 
 # Переменные решения
@@ -241,8 +243,18 @@ model_milp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10),
 # Линейные ограничения
 model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_milp.x[1] + 7 * model_milp.x[2] - 56 == 0)
 
+##############################################################################
+# Задача NLP
+##############################################################################
+model_nlp = copy.deepcopy(model_milp)
+# нелинейная цель
+model_nlp.obj = pyomo.Objective(expr = -(1000 - model_nlp.y[0]**2 - 2*model_nlp.x[1]**2 - model_nlp.x[2]**2 - model_nlp.y[0]*x[1] - model_nlp.y[0]*model_nlp.x[2]), sense=pyomo.minimize)
+# нелинейные ограничения
+model_nlp.nlc1 = pyomo.Constraint(expr = model_nlp.y[0]**2 + model_nlp.x[1]**2 + model_nlp.x[2]**2 <= 25)
+model_nlp.nlc2 = pyomo.Constraint(expr = model_nlp.x[1]**2 + model_nlp.x[2]**2 <= 12)
+
 ###############################################################################
-# Функция, переводящая переменные решения в вектор
+# Функция, переводящая переменные решения pyomo в вектор
 def DV_2_vec(model):
 	x = [model.y[0], model.x[1], model.x[2]]
 	return x
@@ -265,7 +277,7 @@ poa = mmaxgon_MINLP_POA(
 	non_lin_constr_fun=non_lin_cons,
 	decision_vars_to_vector_fun=DV_2_vec,
 	eps=1e-6,
-	solver="cbc"
+	milp_solver="cbc"
 )
 
 start_time = time()
@@ -289,7 +301,7 @@ poa = mmaxgon_MINLP_POA(
 	non_lin_constr_fun=None,
 	decision_vars_to_vector_fun=DV_2_vec,
 	eps=1e-6,
-	solver="cbc"
+	milp_solver="cbc"
 )
 res3 = poa.solve(tolerance=1e-1, add_constr="ALL", tee=False)
 print(res3)
@@ -310,7 +322,7 @@ poa = mmaxgon_MINLP_POA(
 	non_lin_constr_fun=non_lin_cons,
 	decision_vars_to_vector_fun=DV_2_vec,
 	eps=1e-6,
-	solver="cbc"
+	milp_solver="cbc"
 )
 res4 = poa.solve(tolerance=1e-1, add_constr="ALL", tee=False)
 print(res4)
@@ -325,7 +337,7 @@ poa = mmaxgon_MINLP_POA(
 	non_lin_constr_fun=None,
 	decision_vars_to_vector_fun=DV_2_vec,
 	eps=1e-6,
-	solver="cbc"
+	milp_solver="cbc"
 )
 res5 = poa.solve(tolerance=1e-1, add_constr="ALL", tee=False)
 print(res5)
@@ -336,18 +348,15 @@ model_milp.del_component(model_milp.obj)
 # Используется базовый MINLP-солвер
 # Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
-model_milp.obj = pyomo.Objective(expr = -(1000 - model_milp.y[0]**2 - 2*model_milp.x[1]**2 - model_milp.x[2]**2 - model_milp.y[0]*x[1] - model_milp.y[0]*model_milp.x[2]), sense=pyomo.minimize)
-model_milp.nlc1 = pyomo.Constraint(expr = model_milp.y[0]**2 + model_milp.x[1]**2 + model_milp.x[2]**2 <= 25)
-model_milp.nlc2 = pyomo.Constraint(expr = model_milp.x[1]**2 + model_milp.x[2]**2 <= 12)
 
 poa = mmaxgon_MINLP_POA(
 	pyomo=pyomo,
-	pyomo_MILP_model=model_milp,
+	pyomo_MILP_model=model_nlp,
 	non_lin_obj_fun=None,
 	non_lin_constr_fun=None,
 	decision_vars_to_vector_fun=DV_2_vec,
 	eps=1e-6,
-	solver="couenne"
+	milp_solver="couenne"
 )
 
 start_time = time()
@@ -356,7 +365,3 @@ print(time() - start_time)
 
 print(res6)
 print(res2)
-
-model_milp.del_component(model_milp.obj)
-model_milp.del_component(model_milp.nlc1)
-model_milp.del_component(model_milp.nlc2)
