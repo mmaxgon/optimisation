@@ -10,14 +10,14 @@ import scipy.optimize as opt
 class mmaxgon_MINLP_POA:
 	def __init__(self,
 		pyomo,                         # Объект Pyomo
-		pyomo_MILP_model,              # Модель MILP со всеми переменными решения и только линейными ограничениями
-		non_lin_obj_fun,               # Нелинейная цункция цели
-		non_lin_constr_fun,            # Нелинейные ограничения (list)
+		pyomo_MILP_model,              # Модель MILP со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно в pyomo
+		non_lin_obj_fun,               # Нелинейная функция цели (нельзя описать символьно)
+		non_lin_constr_fun,            # Нелинейные ограничения (list) (нельзя описать символьно)
 		decision_vars_to_vector_fun,   # Функция, комбинирующая переменные решения Pyomo в list
 		eps=1e-6,                      # Приращение аргумента для численного дифференцирования
-		milp_solver="cbc",             # MILP солвер
+		milp_solver="cbc",             # MIP солвер (может быть MILP или MINLP, умеющий работать с классом задач, описанным в pyomo)
 		NLP_refiner_class=None,        # Класс с моделью NLP со всеми нелинейными ограничениями и с функцией цели для уточнения значений непрерывных переменных при фиксации целочисленных
-		NLP_projector_class=None       # Класс с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область
+		NLP_projector_class=None       # Класс с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область для последующей построении касательной и линейного ограничения
 	):
 		self.__pyomo = pyomo
 		self.__pyomo_MILP_model = pyomo_MILP_model
@@ -28,7 +28,7 @@ class mmaxgon_MINLP_POA:
 		self.__milp_solver = milp_solver
 		self.__NLP_refiner_class = NLP_refiner_class
 		self.__NLP_projector_class = NLP_projector_class
-
+		# если функция нелинейных ограничений не задана, то ей становится функция-заглушка со значением -1 (т.е. всегда допустимо)
 		if self.__non_lin_constr_fun == None:
 			self.__non_lin_constr_fun = self.__constr_true
 
@@ -40,7 +40,7 @@ class mmaxgon_MINLP_POA:
 	def __get_linear_appr(self, fun, x):
 		return opt.approx_fprime(x, fun, epsilon = self.__eps)
 
-	# якобиан для линейной аппроксимации ограничений
+	# якобиан для линейной аппроксимации матрицы ограничений
 	def __get_linear_appr_matrix(self, fun, x):
 		return opt.slsqp.approx_jacobian(x, fun, epsilon = self.__eps)
 
@@ -88,7 +88,7 @@ class mmaxgon_MINLP_POA:
 
 		while True:
 			iter_num += 1
-			# MILP
+			# Решаем MIP-задачу
 			results = milp_solver.solve(pyomo_MILP_model, tee = tee)
 
 			if results.Solver()["Termination condition"] == self.__pyomo.TerminationCondition.infeasible:
@@ -126,6 +126,28 @@ class mmaxgon_MINLP_POA:
 					print("После уточнения:\r\n")
 					print(x)
 
+			# если это первое решение - убираем ограничение на целевую переменную mu
+			if if_first_feasible and self.__non_lin_obj_fun != None:
+				pyomo_MILP_model.del_component(pyomo_MILP_model.__mu_temp_cons)
+				if_first_feasible = False
+
+			# Если функция цели нелинейная, то добавляем новую аппроксимацию функции цели в ограничения
+			if self.__non_lin_obj_fun != None:
+				fx = self.__non_lin_obj_fun(x)
+				gradf = self.__get_linear_appr(self.__non_lin_obj_fun, x)
+				xgradf = np.dot(x, gradf)
+				pyomo_MILP_model.__obj_cons.add(
+					fx - \
+					xgradf + \
+					sum(xvars[i] * gradf[i] for i in range(len(x))) <= pyomo_MILP_model.__mu
+				)
+				#pyomo_MILP_model.__obj_cons.pprint()
+			else:
+				fx = []
+				for v in pyomo_MILP_model.component_data_objects(self.__pyomo.Objective):
+					fx.append(self.__pyomo.value(v))
+				fx = fx[0]
+
 			# получаем индексы для нарушенных нелинейных ограничений
 			gx = self.__non_lin_constr_fun(x)
 			ix_violated = list(np.where(np.array(gx) > 0)[0])
@@ -133,7 +155,7 @@ class mmaxgon_MINLP_POA:
 			# если решение допустимо
 			if len(ix_violated) == 0:
 				print("Feasible")
-				# проверяем было ли уже данное решение
+				# проверяем было ли уже данное решение, если да, то оно - оптимальное решение
 				for y in x_feasible:
 					if np.allclose(x, y):
 						print("All close!")
@@ -146,28 +168,6 @@ class mmaxgon_MINLP_POA:
 							"upper_bound": upper_bound,
 							"lower_bound": lower_bound
 						}
-
-				# если это первое допустимое решение - убираем ограничение на целевую переменную mu
-				if if_first_feasible and self.__non_lin_obj_fun != None:
-					pyomo_MILP_model.del_component(pyomo_MILP_model.__mu_temp_cons)
-					if_first_feasible = False
-
-				# Если функция цели нелинейная, то добавляем новую аппроксимацию функции цели в ограничения
-				if self.__non_lin_obj_fun != None:
-					fx = self.__non_lin_obj_fun(x)
-					gradf = self.__get_linear_appr(self.__non_lin_obj_fun, x)
-					xgradf = np.dot(x, gradf)
-					pyomo_MILP_model.__obj_cons.add(
-						fx - \
-						xgradf + \
-						sum(xvars[i] * gradf[i] for i in range(len(x))) <= pyomo_MILP_model.__mu
-					)
-					#pyomo_MILP_model.__obj_cons.pprint()
-				else:
-					fx = []
-					for v in pyomo_MILP_model.component_data_objects(self.__pyomo.Objective):
-						fx.append(self.__pyomo.value(v))
-					fx = fx[0]
 
 				# если функция цели такая же как у лучшего решения - сохраняем это решение
 				if np.isclose(fx, goal_best):
