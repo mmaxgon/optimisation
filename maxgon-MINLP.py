@@ -16,8 +16,8 @@ class mmaxgon_MINLP_POA:
 		decision_vars_to_vector_fun,   # Функция, комбинирующая переменные решения Pyomo в list
 		eps=1e-6,                      # Приращение аргумента для численного дифференцирования
 		milp_solver="cbc",             # MILP солвер
-		pyomo_NLP_model=None,          # Модель NLP со всеми нелинейными ограничениями, но без функции цели
-	    nlp_solver="ipopt"             # NLP солвер
+		NLP_refiner_class=None,        # Класс с моделью NLP со всеми нелинейными ограничениями и с функцией цели для уточнения значений непрерывных переменных при фиксации целочисленных
+		NLP_projector_class=None       # Класс с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область
 	):
 		self.__pyomo = pyomo
 		self.__pyomo_MILP_model = pyomo_MILP_model
@@ -26,8 +26,8 @@ class mmaxgon_MINLP_POA:
 		self.__decision_vars_to_vector_fun = decision_vars_to_vector_fun
 		self.__eps = eps
 		self.__milp_solver = milp_solver
-		self.__nlp_solver = nlp_solver
-		self.__pyomo_NLP_model = pyomo_NLP_model
+		self.__NLP_refiner_class = NLP_refiner_class
+		self.__NLP_projector_class = NLP_projector_class
 
 		if self.__non_lin_constr_fun == None:
 			self.__non_lin_constr_fun = self.__constr_true
@@ -86,13 +86,6 @@ class mmaxgon_MINLP_POA:
 		# солвер
 		milp_solver = self.__pyomo.SolverFactory(self.__milp_solver)
 
-		if self.__pyomo_NLP_model != None:
-			pyomo_NLP_model = copy.deepcopy(self.__pyomo_NLP_model)
-			pyomo_NLP_model.obj = None
-			nlp_solver = self.__pyomo.SolverFactory(self.__nlp_solver)
-		else:
-			pyomo_NLP_model = None
-
 		while True:
 			iter_num += 1
 			# MILP
@@ -122,8 +115,16 @@ class mmaxgon_MINLP_POA:
 			# переводим переменные решения в вектор
 			xvars = self.__decision_vars_to_vector_fun(pyomo_MILP_model)
 			x = list(map(self.__pyomo.value, xvars))
-
 			print(x)
+
+			# уточняем непрерывные переменные решения
+			if self.__NLP_refiner_class != None:
+				new_refiner_model = self.__NLP_refiner_class(x)
+				res = new_refiner_model.get_solution()
+				if res["success"]:
+					x = copy.copy(res["x"])
+					print("После уточнения:\r\n")
+					print(x)
 
 			# получаем индексы для нарушенных нелинейных ограничений
 			gx = self.__non_lin_constr_fun(x)
@@ -206,27 +207,15 @@ class mmaxgon_MINLP_POA:
 					ix_most_violated = np.argmax(gx_violated)
 					ix_violated = [ix_violated[ix_most_violated]]
 
-				# если есть нелинейный солвер, то проецируем найденную недопустимую точку на допустимое множество
-				# (без учёта целочисленности). Касательную будем строить к этой точке
-				if pyomo_NLP_model != None:
-					# Получаем проекцию на допустимую область
-					yvars = self.__decision_vars_to_vector_fun(pyomo_NLP_model)
-					pyomo_NLP_model.del_component(pyomo_NLP_model.obj)
-					pyomo_NLP_model.obj = self.__pyomo.Objective(expr = sum((yvars[i] - x[i])**2 for i in range(len(x))), sense=self.__pyomo.minimize)
-					# pyomo_NLP_model.pprint()
-					nlp_solver.solve(pyomo_NLP_model, tee = tee)
-					# переводим переменные решения в вектор
-					x = list(map(self.__pyomo.value, yvars))
-					print("Проекция на допустимую область:\r\n")
-					print(x)
-					# строим касательную в точке проекции
-					gx = self.__non_lin_constr_fun(x)
+				if self.__NLP_projector_class != None:
+					new_projector_model = self.__NLP_projector_class(x)
+					res = new_projector_model.get_solution()
+					if res["success"]:
+						x = copy.copy(res["x"])
+						print("После проецирования:\r\n")
+						print(x)
+						gx = self.__non_lin_constr_fun(x)
 
-				"""
-				Пересчитываем множество нарушенных ограничений, к которым мы будем строить касательную
-				(могла сдивнуться точка касательной из-за её проекции на допусимую область или поменяться
-				набор индексов проецирования (все нарушенные или только одно)
-				"""
 				gx_violated = np.array(gx)[ix_violated]
 				# добавляем линеаризацию нарушенных нелинейных ограничений
 				gradg_violated = self.__get_linear_appr_matrix(lambda x: np.array(self.__non_lin_constr_fun(x))[ix_violated], x)
@@ -278,7 +267,7 @@ model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_m
 ##############################################################################
 model_nlp = copy.deepcopy(model_milp)
 # переменные решения
-# model_nlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = init_integer)
+# model_nlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = init_integer)
 # model_nlp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = init_integer)
 # Линейные ограничения
 # model_nlp.lin_cons = pyomo.Constraint(expr = 8 * model_nlp.y[0] + 14 * model_nlp.x[1] + 7 * model_nlp.x[2] - 56 == 0)
@@ -305,9 +294,81 @@ def non_lin_cons(x):
 	return [x[0]**2 + x[1]**2 + x[2]**2 - 25, x[1]**2 + x[2]**2 - 12]
 
 ###############################################################################
+# scipy
+###############################################################################
+# Класс для уточнения непрерывных переменных решения при фиксации целочисленных
+# Нужен когда непрерывных переменных много
+class scipy_refiner_optimizer:
+	def __init__(self, x):
+		# фиксированные дискретные переменные
+		self.x = [x[1], x[2]]
+		self.y0 = self.get_cont_vars(x)
+		# границы на непрерывные переменные
+		self.bounds = opt.Bounds([0], [10])
+		# линейные ограничения
+		self.linear_constraint = opt.LinearConstraint([[8]], [56-14*self.x[0]-7*self.x[1]], [56--14*self.x[0]-7*self.x[1]])
+		# нелинейные ограничения
+		self.nonlinear_constraint = opt.NonlinearConstraint(lambda x: non_lin_cons(self.get_all_vars(x)), -np.inf, 0)
+
+	# из вектора переменных решений получаем только непрерывные
+	def get_cont_vars(self, x):
+		return x[0]
+	# непрерывные переменные решения конкатенируем с целыми
+	def get_all_vars(self, x):
+		return [x[0], self.x[0], self.x[1]]
+	# целевая функция от непрерывных переменных с фикисированными целыми
+	def get_goal(self, x):
+		return obj(self.get_all_vars(x))
+	def get_solution(self):
+		res = opt.minimize(
+			fun=self.get_goal,
+			bounds=self.bounds,
+			constraints=[self.linear_constraint, self.nonlinear_constraint],
+			x0=self.y0,
+			method="trust-constr",
+			options = {'verbose': 0, "maxiter": 10}
+		)
+		res = {"x": self.get_all_vars(res.x), "obj": res.fun, "success": res.success}
+		return res
+# new_scipy_optimizer = scipy_refiner_optimizer([1.75, 2.0, 2.0])
+# res = new_scipy_optimizer.get_solution()
+# res
+
+# Класс для проекции недопустимого решения на допустимую область с релаксацией целочисленности
+# Нужен для уменьшения итераций по линейной аппроксимации ограничений
+class scipy_projector_optimizer:
+	def __init__(self, x):
+		# фиксированные дискретные переменные
+		self.x0 = copy.copy(x)
+		# границы на непрерывные переменные
+		self.bounds = opt.Bounds([0, 0, 0], [10, 10, 10])
+		# линейные ограничения
+		self.linear_constraint = opt.LinearConstraint([[8, 14, 7]], [56], [56])
+		# нелинейные ограничения
+		self.nonlinear_constraint = opt.NonlinearConstraint(non_lin_cons, -np.inf, 0)
+
+	# целевая функция - расстояние до допустимого множества
+	def get_goal(self, x):
+		return sum((x[i] - self.x0[i])**2 for i in range(len(x)))
+	def get_solution(self):
+		res = opt.minimize(
+			fun=self.get_goal,
+			bounds=self.bounds,
+			constraints=[self.linear_constraint, self.nonlinear_constraint],
+			x0=self.x0,
+			method="trust-constr",
+			options = {'verbose': 0, "maxiter": 100}
+		)
+		res = {"x": res.x, "obj": res.fun, "success": res.success}
+		return res
+
+# new_scipy_optimizer = scipy_projector_optimizer([2, 2.0, 2.0])
+# res = new_scipy_optimizer.get_solution()
+# res
+###############################################################################
 # Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
-# с IPOPT
+# с NLP
 poa = mmaxgon_MINLP_POA(
 	pyomo=pyomo,
 	pyomo_MILP_model=model_milp,
@@ -316,8 +377,8 @@ poa = mmaxgon_MINLP_POA(
 	decision_vars_to_vector_fun=DV_2_vec,
 	eps=1e-6,
 	milp_solver="cbc",
-	pyomo_NLP_model=model_nlp,
-	nlp_solver="ipopt"
+	#NLP_refiner_class=scipy_refiner_optimizer,
+	NLP_projector_class=scipy_projector_optimizer
 )
 
 start_time = time()
@@ -328,7 +389,7 @@ start_time = time()
 res2 = poa.solve(tolerance=1e-1, add_constr="ALL", tee=False)
 print(time() - start_time)
 
-# без IPOPT
+# без NLP
 poa = mmaxgon_MINLP_POA(
 	pyomo=pyomo,
 	pyomo_MILP_model=model_milp,
@@ -371,7 +432,6 @@ print(res5)
 # Есть нелинейные ограничения, функция цели - линейная
 ###########################
 model_milp.obj = pyomo.Objective(expr= model_milp.y[0] + 2*model_milp.x[1] + model_milp.x[2])
-model_milp.nobjectives()
 
 poa = mmaxgon_MINLP_POA(
 	pyomo=pyomo,
@@ -423,6 +483,23 @@ res8 = poa.solve(tolerance=1e-1, add_constr="ONE", tee=False)
 print(time() - start_time)
 
 print(res8)
-print(res1)
+print(res3)
 
 model_nlp.del_component(model_nlp.obj)
+####################################################################
+poa = mmaxgon_MINLP_POA(
+	pyomo=pyomo,
+	pyomo_MILP_model=model_nlp,
+	non_lin_obj_fun=obj,
+	non_lin_constr_fun=None,
+	decision_vars_to_vector_fun=DV_2_vec,
+	eps=1e-6,
+	milp_solver="couenne"
+)
+
+start_time = time()
+res9 = poa.solve(tolerance=1e-1, add_constr="ONE", tee=False)
+print(time() - start_time)
+
+print(res9)
+print(res1)
