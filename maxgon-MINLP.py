@@ -4,8 +4,11 @@
 import copy
 from time import time
 import numpy as np
+
 import pyomo.environ as pyomo
 import scipy.optimize as opt
+
+import ortools.sat.python.cp_model as ortools_cp_model
 
 ####################################################################################################
 # Обёртка описания задачи MIP в виде pyomo
@@ -13,8 +16,8 @@ import scipy.optimize as opt
 class pyomo_MIP_model_wrapper:
 	def __init__(
 		self,
-		pyomo,                         # Объект Pyomo
-		pyomo_MIP_model,               # Модель MIP со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно в pyomo
+		pyomo,                         # Объект pyomo.environ
+		pyomo_MIP_model,               # Модель MIP pyomo.ConcreteModel() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно в pyomo
 		mip_solver_name="cbc"          # MIP солвер (может быть MILP или MINLP, умеющий работать с классом задач, описанным в pyomo)
 	):
 		self.__pyomo = pyomo
@@ -109,6 +112,94 @@ class pyomo_MIP_model_wrapper:
 	def solve(self):
 		results = self.__mip_solver.solve(self.__pyomo_MIP_model, tee=False)
 		if results.Solver()["Termination condition"] == self.__pyomo.TerminationCondition.infeasible:
+			return False
+		return True
+
+####################################################################################################
+# Обёртка описания задачи MIP в виде google ortools cp_sat
+####################################################################################################
+class ortools_cp_sat_MIP_model_wrapper:
+	def __init__(
+		self,
+		ortools_cp_model,              # Объект ortools.sat.python.cp_model
+		model_milp_cpsat,              # Модель MIP ortools_cp_model.CpModel() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
+		BIG_MULT = 1e6                 # На что умножаем коэффициенты ограничений, чтобы они стали целыми
+	):
+		self.__ortools_cp_model = ortools_cp_model
+		self.__model_milp_cpsat = copy.deepcopy(model_milp_cpsat)
+		self.__BIG_MULT = BIG_MULT
+
+		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
+		self.__non_lin_cons = []
+		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
+		self.__obj_cons = []
+
+		"""
+		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
+		Если функции цели в pyomo_MILP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
+		В этом случае мы будем минимизировать её линейные аппроксимации.
+		"""
+		self.__if_objective_defined = self.__model_milp_cpsat.HasObjective()
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__model_milp_cpsat.NewIntVar(-1000000000, 1000000000, "mu")
+			self.__model_milp_cpsat.Minimize(self.__mu)
+
+		self.__model_milp_cpsat_solver = self.__ortools_cp_model.CpSolver()
+		self.__model_milp_cpsat_solver.parameters.max_time_in_seconds = 60.0
+
+	# возвращаем модель
+	def get_mip_model(self):
+		return self.__model_milp_cpsat
+
+	# возвращаем число аппроксимаций функции цели
+	def get_object_cuts_num(self):
+		return len(self.__obj_cons)
+
+	# возвращаем число аппроксимаций нелинейных ограничений
+	def get_non_lin_constr_cuts_num(self):
+		return len(self.__obj_cons)
+
+	# удаляем временные ограничения
+	def del_temp_constr(self):
+		return False
+
+	# задана ли функция цели в pyomo
+	def if_objective_defined(self):
+		return self.__if_objective_defined
+
+	# значение целевой функции
+	def get_objective_value(self):
+		return self.__model_milp_cpsat_solver.ObjectiveValue()
+
+	# значения переменных решения
+	def get_values(self, xvars):
+		return list(map(self.__model_milp_cpsat_solver.Value, xvars))
+
+	# очищаем аппроксимационные ограничения
+	def clear(self):
+		self.__non_lin_cons.clear()
+		self.__obj_cons.clear()
+
+	# добавляем лианеризованные ограничения на функцию цели
+	def add_obj_constr(self, fx, gradf, xgradf, xvars):
+		expr = int(np.round(self.__BIG_MULT*fx)) - \
+			int(np.round(self.__BIG_MULT*xgradf)) + \
+			sum(xvars[i] * int(np.round(self.__BIG_MULT*gradf[i])) for i in range(len(x))) <= int(self.__BIG_MULT)*self.__mu
+		new_constr = self.__model_milp_cpsat.Add(expr)
+		self.__obj_cons.append(new_constr)
+
+	# добавляем лианеризованные ограничения на нарушенные ограничения
+	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
+		expr = int(np.round(self.__BIG_MULT*gx_violated[k])) - \
+			int(np.round(self.__BIG_MULT*xgradg_violated[k])) + \
+			sum(xvars[i] * int(np.round(self.__BIG_MULT*gradg_violated[k][i])) for i in range(len(x))) <= 0
+		new_constr = self.__model_milp_cpsat.Add(expr)
+		self.__non_lin_cons.append(new_constr)
+
+	def solve(self):
+		results = self.__model_milp_cpsat_solver.Solve(self.__model_milp_cpsat)
+		if self.__model_milp_cpsat_solver.StatusName() == 'INFEASIBLE':
 			return False
 		return True
 
@@ -314,7 +405,7 @@ s.t. c2: x[1]^2 + x[2]^2 + x[3]^2 - 25 <= 0;
 c3: x[2]^2 + x[3]^2 <= 12;	
 '''
 ##############################################################################
-# Задача как MILP
+# Задача как MILP Pyomo
 ##############################################################################
 model_milp = pyomo.ConcreteModel()
 
@@ -333,27 +424,51 @@ model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_m
 
 # result = pyomo.SolverFactory("cbc").solve(model_milp)
 # [model_milp.y[0](), model_milp.x[1](), model_milp.x[1]()]
+
 ##############################################################################
-# Задача NLP - добавляем нелинейные ограничения
+# Задача как MINLP Pyomo
 ##############################################################################
-model_nlp = copy.deepcopy(model_milp)
+model_minlp = pyomo.ConcreteModel()
 # переменные решения
-# model_nlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = init_integer)
-# model_nlp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = init_integer)
+model_minlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = init_integer)
+model_minlp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = init_integer)
 # Линейные ограничения
-# model_nlp.lin_cons = pyomo.Constraint(expr = 8 * model_nlp.y[0] + 14 * model_nlp.x[1] + 7 * model_nlp.x[2] - 56 == 0)
+model_minlp.lin_cons = pyomo.Constraint(expr = 8 * model_minlp.y[0] + 14 * model_minlp.x[1] + 7 * model_minlp.x[2] - 56 == 0)
 # нелинейные ограничения
-model_nlp.nlc1 = pyomo.Constraint(expr = model_nlp.y[0]**2 + model_nlp.x[1]**2 + model_nlp.x[2]**2 <= 25)
-model_nlp.nlc2 = pyomo.Constraint(expr = model_nlp.x[1]**2 + model_nlp.x[2]**2 <= 12)
+model_minlp.nlc1 = pyomo.Constraint(expr = model_minlp.y[0]**2 + model_minlp.x[1]**2 + model_minlp.x[2]**2 <= 25)
+model_minlp.nlc2 = pyomo.Constraint(expr = model_minlp.x[1]**2 + model_minlp.x[2]**2 <= 12)
 # нелинейная цель
-# model_nlp.obj = pyomo.Objective(expr = -(1000 - model_nlp.y[0]**2 - 2*model_nlp.x[1]**2 - model_nlp.x[2]**2 - model_nlp.y[0]*x[1] - model_nlp.y[0]*model_nlp.x[2]), sense=pyomo.minimize)
-# pyomo.SolverFactory("ipopt").solve(model_nlp)
-# [model_nlp.y[0](), model_nlp.x[1](), model_nlp.x[1]()]
+model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
+
+# pyomo.SolverFactory("couenne").solve(model_minlp)
+# [model_minlp.y[0](), model_minlp.x[1](), model_minlp.x[1]()]
+
+##############################################################################
+# Задача как MILP CP-SAT
+##############################################################################
+model_milp_cpsat = ortools_cp_model.CpModel()
+
+# Переменные решения (все целочисленные)
+model_milp_cpsat_x = [model_milp_cpsat.NewIntVar(0, 10, "x[{}]".format(i)) for i in range(3)]
+
+# Линейные ограничения
+model_milp_cpsat_lin_cons = model_milp_cpsat.Add(8 * model_milp_cpsat_x[0] + 14 * model_milp_cpsat_x[1] + 7 * model_milp_cpsat_x[2] - 56 == 0)
+
+# model_milp_cpsat_solver = ortools_cp_model.CpSolver()
+# model_milp_cpsat_solver.parameters.max_time_in_seconds = 60.0
+# status = model_milp_cpsat_solver.Solve(model_milp_cpsat)
+# model_milp_cpsat_solver.StatusName()
+# list(map(model_milp_cpsat_solver.Value, [model_milp_cpsat_x[0], model_milp_cpsat_x[1], model_milp_cpsat_x[1]]))
 
 ###############################################################################
 # Функция, переводящая переменные решения pyomo в вектор
 def DV_2_vec(model):
 	x = [model.y[0], model.x[1], model.x[2]]
+	return x
+
+# Функция, переводящая переменные решения cp_sat в вектор
+def DV_2_vec_cp_sat(model):
+	x = [model.GetIntVarFromProtoIndex(0), model.GetIntVarFromProtoIndex(1), model.GetIntVarFromProtoIndex(2)]
 	return x
 
 # нелинейная выпуклая функция цели
@@ -363,6 +478,9 @@ def obj(x):
 # нелинейные ограничения - неравенства
 def non_lin_cons(x):
 	return [x[0]**2 + x[1]**2 + x[2]**2 - 25, x[1]**2 + x[2]**2 - 12]
+
+def non_lin_cons_cp_sat(x):
+	return [x[0]**2 + x[1]**2 + x[2]**2 - 25, x[1]**2 + x[2]**2 - 13]
 
 ###############################################################################
 # scipy
@@ -447,8 +565,32 @@ scipy_projector_optimizer_obj = scipy_projector_optimizer()
 poa = mmaxgon_MINLP_POA(
 	eps=1e-6
 )
+
 ###############################################################################
-# Нелинейная функция цели, есть нелинейные ограничения
+# ortools cp_sat Нелинейная функция цели, есть нелинейные ограничения
+###############################################################################
+ortools_cp_sat_mip_model_wrapper = ortools_cp_sat_MIP_model_wrapper(
+	ortools_cp_model=ortools_cp_model,
+	model_milp_cpsat=model_milp_cpsat,
+	BIG_MULT=1e6
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=ortools_cp_sat_mip_model_wrapper,
+	non_lin_obj_fun=obj,
+	non_lin_constr_fun=non_lin_cons_cp_sat,
+	decision_vars_to_vector_fun=DV_2_vec_cp_sat,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_refiner_class=None,
+	NLP_projector_object=scipy_projector_optimizer_obj
+)
+print(time() - start_time)
+print(res)
+
+###############################################################################
+# pyomo Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
 # с NLP
 pyomo_mip_model_wrapper = pyomo_MIP_model_wrapper(
@@ -470,6 +612,11 @@ res1 = poa.solve(
 )
 print(time() - start_time)
 
+pyomo_mip_model_wrapper = pyomo_MIP_model_wrapper(
+	pyomo=pyomo,
+	pyomo_MIP_model=model_milp,
+	mip_solver_name="cbc"
+)
 start_time = time()
 res2 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
@@ -500,6 +647,12 @@ res3 = poa.solve(
 	add_constr="ONE"
 )
 print(time() - start_time)
+
+pyomo_mip_model_wrapper = pyomo_MIP_model_wrapper(
+	pyomo=pyomo,
+	pyomo_MIP_model=model_milp,
+	mip_solver_name="cbc"
+)
 
 start_time = time()
 res4 = poa.solve(
@@ -578,10 +731,9 @@ model_milp.del_component(model_milp.obj)
 # Используется базовый MINLP-солвер
 # Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
-model_nlp.obj = pyomo.Objective(expr = -(1000 - model_nlp.y[0]**2 - 2*model_nlp.x[1]**2 - model_nlp.x[2]**2 - model_nlp.y[0]*x[1] - model_nlp.y[0]*model_nlp.x[2]), sense=pyomo.minimize)
 pyomo_mip_model_wrapper = pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
-	pyomo_MIP_model=model_nlp,
+	pyomo_MIP_model=model_minlp,
 	mip_solver_name="couenne"
 )
 
@@ -599,11 +751,11 @@ print(time() - start_time)
 print(res8)
 print(res3)
 
-model_nlp.del_component(model_nlp.obj)
 ####################################################################
+model_minlp.del_component(model_minlp.obj)
 pyomo_mip_model_wrapper = pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
-	pyomo_MIP_model=model_nlp,
+	pyomo_MIP_model=model_minlp,
 	mip_solver_name="couenne"
 )
 
@@ -620,3 +772,6 @@ print(time() - start_time)
 
 print(res9)
 print(res1)
+
+model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
+
