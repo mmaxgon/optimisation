@@ -2,13 +2,8 @@
 # MINLP with Polyhedral Outer Approximation
 ####################################################################################################
 import copy
-from time import time
 import numpy as np
-
-import pyomo.environ as pyomo
 import scipy.optimize as opt
-
-import ortools.sat.python.cp_model as ortools_cp_model
 
 ####################################################################################################
 # Обёртка описания задачи MIP в виде pyomo
@@ -200,6 +195,89 @@ class ortools_cp_sat_MIP_model_wrapper:
 	def solve(self):
 		results = self.__model_milp_cpsat_solver.Solve(self.__model_milp_cpsat)
 		if self.__model_milp_cpsat_solver.StatusName() == 'INFEASIBLE':
+			return False
+		return True
+
+####################################################################################################
+# Обёртка описания задачи MIP в виде CPLEX MP
+####################################################################################################
+class cplex_MIP_model_wrapper:
+	def __init__(
+		self,
+		model_cplex              # Модель MIP docplex.mp.model.Model() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
+	):
+		self.__model_cplex = copy.deepcopy(model_cplex)
+
+		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
+		self.__non_lin_cons = []
+		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
+		self.__obj_cons = []
+
+		"""
+		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
+		Если функции цели в pyomo_MILP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
+		В этом случае мы будем минимизировать её линейные аппроксимации.
+		"""
+		self.__if_objective_defined = self.__model_cplex.has_objective()
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__model_cplex.var(lb=-1e6, ub=np.Inf, vartype=self.__model_cplex.continuous_vartype, name="mu")
+			# На первом шаге накладываем на неё ограничение снизу, чтобы было решение
+			#self.__model_cplex.__mu_temp_cons = self.__model_cplex.Add(expr=self.__mu >= -1e6)
+			self.__model_cplex.minimize(self.__mu)
+		
+	# возвращаем модель
+	def get_mip_model(self):
+		return self.__model_cplex
+
+	# возвращаем число аппроксимаций функции цели
+	def get_object_cuts_num(self):
+		return len(self.__obj_cons)
+
+	# возвращаем число аппроксимаций нелинейных ограничений
+	def get_non_lin_constr_cuts_num(self):
+		return len(self.__obj_cons)
+
+	# удаляем временные ограничения
+	def del_temp_constr(self):
+		return False
+
+	# задана ли функция цели в pyomo
+	def if_objective_defined(self):
+		return self.__if_objective_defined
+
+	# значение целевой функции
+	def get_objective_value(self):
+		return self.__model_cplex.objective_value
+
+	# значения переменных решения
+	def get_values(self, xvars):
+		return [v.solution_value for v in xvars]
+
+	# очищаем аппроксимационные ограничения
+	def clear(self):
+		self.__non_lin_cons.clear()
+		self.__obj_cons.clear()
+
+	# добавляем линеаризованные ограничения на функцию цели
+	def add_obj_constr(self, fx, gradf, xgradf, xvars):
+		expr = fx - \
+			xgradf + \
+			sum(xvars[i] * gradf[i] for i in range(len(xvars))) <= self.__mu
+		new_constr = self.__model_cplex.add(expr)
+		self.__obj_cons.append(new_constr)
+
+	# добавляем лианеризованные ограничения на нарушенные ограничения
+	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
+		expr = gx_violated[k] - \
+			xgradg_violated[k] + \
+			sum(xvars[i] * gradg_violated[k][i] for i in range(len(xvars))) <= 0
+		new_constr = self.__model_cplex.add(expr)
+		self.__non_lin_cons.append(new_constr)
+
+	def solve(self):
+		results = self.__model_cplex.solve()
+		if not results:
 			return False
 		return True
 

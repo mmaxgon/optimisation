@@ -7,10 +7,13 @@ import copy
 from time import time
 import numpy as np
 
-import pyomo.environ as pyomo
 import scipy.optimize as opt
 
+import pyomo.environ as pyomo
+
 import ortools.sat.python.cp_model as ortools_cp_model
+
+import docplex.mp.model as docplex_mp_model
 
 ###############################################################################
 '''
@@ -38,11 +41,11 @@ model_milp = pyomo.ConcreteModel()
 x = np.array([2]*3)
 def init_integer(model, i):
 	return x[i]
+
 # целочисленные переменные решения
 model_milp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = init_integer)
 # непрерывные переменные решения
 model_milp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = init_integer)
-
 # Линейные ограничения
 model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_milp.x[1] + 7 * model_milp.x[2] - 56 == 0)
 
@@ -84,6 +87,24 @@ model_milp_cpsat_lin_cons = model_milp_cpsat.Add(8 * model_milp_cpsat_x[0] + 14 
 # model_milp_cpsat_solver.StatusName()
 # list(map(model_milp_cpsat_solver.Value, [model_milp_cpsat_x[0], model_milp_cpsat_x[1], model_milp_cpsat_x[1]]))
 
+##############################################################################
+# Задача как CPLEX MP
+##############################################################################
+model_cplex = docplex_mp_model.Model()
+
+# Переменные решения (непрерывные)
+model_cplex_y = model_cplex.var_list([0], lb=0, ub=10, vartype=model_cplex.continuous_vartype, name="y")
+# Переменные решения (целочисленные)
+model_cplex_x = model_cplex.var_list([1, 2], lb=0, ub=10, vartype=model_cplex.integer_vartype, name="x")
+
+# Линейные ограничения
+model_cplex_lin_cons = model_cplex.add(8 * model_cplex_y[0] + 14 * model_cplex_x[0] + 7 * model_cplex_x[1] - 56 == 0)
+
+# DV_2_vec_cplex(model_cplex)
+# [v.solution_value for v in DV_2_vec_cplex(model_cplex)]
+# sol = model_cplex.solve()
+# (sol["y_0"], sol["x_1"], sol["x_2"])
+
 ###############################################################################
 # Функция, переводящая переменные решения pyomo в вектор
 def DV_2_vec(model):
@@ -93,6 +114,11 @@ def DV_2_vec(model):
 # Функция, переводящая переменные решения cp_sat в вектор
 def DV_2_vec_cp_sat(model):
 	x = [model.GetIntVarFromProtoIndex(0), model.GetIntVarFromProtoIndex(1), model.GetIntVarFromProtoIndex(2)]
+	return x
+
+# Функция, переводящая переменные решения cplex в вектор
+def DV_2_vec_cplex(model):
+	x = [model.get_var_by_index(0), model.get_var_by_index(1), model.get_var_by_index(2)]
 	return x
 
 # нелинейная выпуклая функция цели
@@ -189,6 +215,27 @@ scipy_projector_optimizer_obj = scipy_projector_optimizer()
 poa = mg_minlp.mmaxgon_MINLP_POA(
 	eps=1e-6
 )
+
+###############################################################################
+# CPLEX MP Нелинейная функция цели, есть нелинейные ограничения
+###############################################################################
+cplex_mip_model_wrapper = mg_minlp.cplex_MIP_model_wrapper(
+	model_cplex=model_cplex
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=cplex_mip_model_wrapper,
+	non_lin_obj_fun=obj,
+	non_lin_constr_fun=non_lin_cons,
+	decision_vars_to_vector_fun=DV_2_vec_cplex,
+	tolerance=1e-1,
+	add_constr="ONE",
+	NLP_refiner_class=None,
+	NLP_projector_object=scipy_projector_optimizer_obj
+)
+print(time() - start_time)
+print(res)
 
 ###############################################################################
 # ortools cp_sat Нелинейная функция цели, есть нелинейные ограничения
