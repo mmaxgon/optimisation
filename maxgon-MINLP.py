@@ -1,5 +1,7 @@
-import maxgon_MINLP_POA as mg_minlp
+import importlib
 
+import maxgon_MINLP_POA as mg_minlp
+importlib.reload(mg_minlp)
 ####################################################################################################
 # MINLP with Polyhedral Outer Approximation
 ####################################################################################################
@@ -231,7 +233,7 @@ res = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec_cplex,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_class=None,
+	NLP_refiner_class=None, #scipy_refiner_optimizer,
 	NLP_projector_object=scipy_projector_optimizer_obj
 )
 print(time() - start_time)

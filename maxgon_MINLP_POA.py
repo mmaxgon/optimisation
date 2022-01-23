@@ -135,10 +135,6 @@ class ortools_cp_sat_MIP_model_wrapper:
 		В этом случае мы будем минимизировать её линейные аппроксимации.
 		"""
 		self.__if_objective_defined = self.__model_milp_cpsat.HasObjective()
-		if not self.__if_objective_defined:
-			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__mu = self.__model_milp_cpsat.NewIntVar(-1000000000, 1000000000, "mu")
-			self.__model_milp_cpsat.Minimize(self.__mu)
 
 		self.__model_milp_cpsat_solver = self.__ortools_cp_model.CpSolver()
 		self.__model_milp_cpsat_solver.parameters.max_time_in_seconds = 60.0
@@ -157,7 +153,11 @@ class ortools_cp_sat_MIP_model_wrapper:
 
 	# удаляем временные ограничения
 	def del_temp_constr(self):
-		return False
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__model_milp_cpsat.NewIntVar(-1000000000, 1000000000, "mu")
+			# Добавляем цель
+			self.__model_milp_cpsat.Minimize(self.__mu)
 
 	# задана ли функция цели в pyomo
 	def if_objective_defined(self):
@@ -219,13 +219,7 @@ class cplex_MIP_model_wrapper:
 		В этом случае мы будем минимизировать её линейные аппроксимации.
 		"""
 		self.__if_objective_defined = self.__model_cplex.has_objective()
-		if not self.__if_objective_defined:
-			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__mu = self.__model_cplex.var(lb=-1e6, ub=np.Inf, vartype=self.__model_cplex.continuous_vartype, name="mu")
-			# На первом шаге накладываем на неё ограничение снизу, чтобы было решение
-			#self.__model_cplex.__mu_temp_cons = self.__model_cplex.Add(expr=self.__mu >= -1e6)
-			self.__model_cplex.minimize(self.__mu)
-		
+
 	# возвращаем модель
 	def get_mip_model(self):
 		return self.__model_cplex
@@ -240,7 +234,11 @@ class cplex_MIP_model_wrapper:
 
 	# удаляем временные ограничения
 	def del_temp_constr(self):
-		return False
+		# Добавляем цель
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__model_cplex.var(lb=-np.Inf, ub=np.Inf, vartype=self.__model_cplex.continuous_vartype, name="mu")
+			self.__model_cplex.minimize(self.__mu)
 
 	# задана ли функция цели в pyomo
 	def if_objective_defined(self):
