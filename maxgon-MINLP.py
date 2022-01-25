@@ -51,8 +51,10 @@ model_milp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10),
 # Линейные ограничения
 model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_milp.x[1] + 7 * model_milp.x[2] - 56 == 0)
 
+# model_milp.obj = pyomo.Objective(expr = 0, sense=pyomo.minimize)
 # result = pyomo.SolverFactory("cbc").solve(model_milp)
 # [model_milp.y[0](), model_milp.x[1](), model_milp.x[1]()]
+# model_milp.del_component(model_milp.obj)
 
 ##############################################################################
 # Задача как MINLP Pyomo
@@ -150,7 +152,7 @@ class scipy_refiner_optimizer:
 		# границы на непрерывные переменные
 		self.bounds = opt.Bounds([0], [10])
 		# линейные ограничения на непрерывные переменные (дискретные фиксированы и идут в правую часть)
-		self.linear_constraint = opt.LinearConstraint([[8]], [56-14*self.x[0]-7*self.x[1]], [56--14*self.x[0]-7*self.x[1]])
+		self.linear_constraint = opt.LinearConstraint([[8]], [56-14*self.x[0]-7*self.x[1]], [56-14*self.x[0]-7*self.x[1]])
 		# нелинейные ограничения на непрерывные переменные (дискретные фиксированы и идут в правую часть)
 		self.nonlinear_constraint = opt.NonlinearConstraint(lambda x: non_lin_cons(self.get_all_vars(x)), -np.inf, 0)
 
@@ -269,7 +271,7 @@ print(res)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc"
+	mip_solver_name="cbc" #"cplex"
 )
 
 start_time = time()
@@ -280,7 +282,7 @@ res1 = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	# NLP_refiner_class=scipy_refiner_optimizer,
+	NLP_refiner_class=None, #scipy_refiner_optimizer,
 	NLP_projector_object=scipy_projector_optimizer_obj
 )
 print(time() - start_time)
