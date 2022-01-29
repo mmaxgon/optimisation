@@ -1,10 +1,6 @@
-"""
-https://developers.google.com/optimization/reference/python/sat/python/cp_model
-https://github.com/google/or-tools/blob/stable/ortools/sat/samples/
-"""
 from time import time
 import numpy as np
-from ortools.sat.python import cp_model
+from docplex.cp.model import CpoModel
 
 ############################################################################
 # Data
@@ -42,83 +38,72 @@ sales = {
 # Модель
 ############################################################################
 
-model = cp_model.CpModel()
+model = CpoModel()
 
 ############################################################################
 # Decision vars
 ############################################################################
-x = [[[model.NewBoolVar("x[{}, {}, {}]".format(h, m, t)) for t in period] for m in movies] for h in halls]
-shows = [[[model.NewOptionalIntervalVar(
-	start=t,
-	size=movies[m]["len"] + 1,
-	end=t + movies[m]["len"] + 1,
-	is_present=x[ix_h][ix_m][t],
-	name="show[{}, {}, {}]".format(h, m, t)
-) for t in period] for ix_m, m in enumerate(movies)] for ix_h, h in enumerate(halls)]
+shows = {(h, m, t):
+	         model.interval_var(
+		         start=t,
+		         end=t + movies[m]["len"] + 1,
+		         size=movies[m]["len"] + 1,
+		         optional=True, name="show[{}, {}, {}]".format(h, m, t)
+	         ) for t in period for ix_m, m in enumerate(movies) for ix_h, h in enumerate(halls)}
 ############################################################################
 # Constraints
 ############################################################################
-NBIG = 100
-
 # Максиммальное и минимальное число фильмов
 for ix_m, movie in enumerate(movies):
-	model.Add(sum(x[ix_h][ix_m][t] for ix_h in range(len(halls)) for t in period) <= movies[movie]["max"])
-	model.Add(sum(x[ix_h][ix_m][t] for ix_h in range(len(halls)) for t in period) >= movies[movie]["min"])
+	model.add(sum(model.presence_of(shows[(h, movie, t)]) for h in halls for t in period) <= movies[movie]["max"])
+	model.add(sum(model.presence_of(shows[(h, movie, t)]) for h in halls for t in period) >= movies[movie]["min"])
 
 # Фильмы только в поддерживаемых формат заллах
 for ix_m, m in enumerate(movies):
 	allowed_h = movie_halls[m]
 	for ix_h, h in enumerate(halls):
 		if not (h in allowed_h):
-			model.Add(sum(x[ix_h][ix_m][t] for t in period) == 0)
-			
-"""
-Непересечение сеансов можно задать через линейные логические неравенства с использованием NBIG,
-а можно через интервалы и ограничение на них NoOverLap
-"""		
+			model.add(sum(model.presence_of(shows[(h, m, t)]) for t in period) == 0)
+
 # в каждом зале в каждый момент времени начинается не больше одного сеанса
 for ix_h, h in enumerate(halls):
  	for t in period:
-		 model.Add(sum(x[ix_h][ix_m][t] for ix_m in range(len(movies))) <= 1)
-# сеансы не пересекаются
-for ix_h, h in enumerate(halls):
-	for ix_m, m in enumerate(movies):
-		d = movies[m]["len"]
-		for tstart in range(T):
-			tend = tstart + np.min([T - tstart - 1, d])
-			#print(d, tstart, tend)
-			model.Add(NBIG * x[ix_h][ix_m][tstart] + sum(x[ix_h][ix_m1][t] for t in range(tstart, tend + 1) for ix_m1, m1 in enumerate(movies) if m1 != m) <= NBIG)
-			model.Add(NBIG * x[ix_h][ix_m][tstart] + sum(x[ix_h][ix_m][t] for t in range(tstart + 1, tend + 1)) <= NBIG)
+		 model.add(sum(model.presence_of(shows[(h, m, t)]) for m in movies) <= 1)
 
 # # сеансы не пересекаются (ограничение через интервалы)
-# for ix_h, h in enumerate(halls):
-#  	model.AddNoOverlap(shows[ix_h][ix_m][t] for ix_m, m in enumerate(movies) for t in period)
+for ix_h, h in enumerate(halls):
+ 	model.add(model.no_overlap([shows[(h, m, t)] for ix_m, m in enumerate(movies) for t in period]))
 ############################################################################
 # Objective
 ############################################################################
-model.Maximize(sum(sales[m][t] * x[ix_h][ix_m][t] for ix_h, h in enumerate(halls) for ix_m, m in enumerate(movies) for t in period))
+model.maximize(
+	sum(
+		sales[m][t] * (model.presence_of(shows[(h, m, t)]))
+		for ix_h, h in enumerate(halls)
+		for ix_m, m in enumerate(movies)
+		for t in period
+	)
+)
 
 ############################################################################
 # Solve
 ############################################################################
-solver = cp_model.CpSolver()
-solver.parameters.max_time_in_seconds = 60.0
 start_time = time()
-status = solver.Solve(model)
+msol = model.solve(TimeLimit=10, trace_log=False, Workers="Auto")
 end_time = time()
 
 ############################################################################
 # Solution
 ############################################################################
-if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+if msol.get_solve_status() == "Optimal" or msol.get_solve_status() == "Feasible":
 	for ix_h, h in enumerate(halls):
 		for ix_t, t in enumerate(period):
 			for ix_m, m in enumerate(movies):
-				if solver.BooleanValue(x[ix_h][ix_m][ix_t]):
+				if len(msol[shows[h, m, t]]) > 0:
 					print("hall {}, time {}, movie {}".format(h, t, m))
 else:
 	print('No solution found.')
 
-print(solver.StatusName(status))
-print(solver.ObjectiveValue())
+print(msol.get_solve_status())
+print(msol.get_objective_value())
 print(end_time - start_time)
