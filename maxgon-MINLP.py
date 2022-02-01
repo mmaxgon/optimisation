@@ -8,15 +8,12 @@ importlib.reload(mg_minlp)
 import copy
 from time import time
 import numpy as np
-
 import scipy.optimize as opt
 
 import pyomo.environ as pyomo
-
 import ortools.sat.python.cp_model as ortools_cp_model
-
 import docplex.mp.model as docplex_mp_model
-
+from gekko import GEKKO
 ###############################################################################
 '''
 var x{j in 1..3} >= 0;
@@ -69,7 +66,7 @@ model_minlp.lin_cons = pyomo.Constraint(expr = 8 * model_minlp.y[0] + 14 * model
 model_minlp.nlc1 = pyomo.Constraint(expr = model_minlp.y[0]**2 + model_minlp.x[1]**2 + model_minlp.x[2]**2 <= 25)
 model_minlp.nlc2 = pyomo.Constraint(expr = model_minlp.x[1]**2 + model_minlp.x[2]**2 <= 12)
 # нелинейная цель
-model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
+model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*model_minlp.x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
 
 # pyomo.SolverFactory("couenne").solve(model_minlp)
 # [model_minlp.y[0](), model_minlp.x[1](), model_minlp.x[1]()]
@@ -109,6 +106,54 @@ model_cplex_lin_cons = model_cplex.add(8 * model_cplex_y[0] + 14 * model_cplex_x
 # sol = model_cplex.solve()
 # (sol["y_0"], sol["x_1"], sol["x_2"])
 
+##############################################################################
+# Задача как GEKKO MILP
+##############################################################################
+model_gekko = GEKKO(remote = False) # Initialize gekko
+model_gekko.options.SOLVER = 1  # APOPT is an MINLP solver
+
+# Переменные решения (непрерывные)
+model_gekko.y = [model_gekko.Var(value=2, lb=0, ub=10, name="y_0")]
+# Переменные решения (целочисленные)
+model_gekko.x = [model_gekko.Var(value=2, lb=0, ub=10, integer=True, name="x_{}".format(i)) for i in [1,2]]
+
+# Линейные ограничения
+model_gekko.Equation(8 * model_gekko.y[0] + 14 * model_gekko.x[0] + 7 * model_gekko.x[1] - 56 == 0)
+
+# model_gekko.Obj(-1e6)
+# model_gekko.solve(disp=True)
+# print(model_gekko.y[0].value)
+# print(model_gekko.x[0].value)
+# print(model_gekko.x[1].value)
+# print(model_gekko.options.SOLVESTATUS)
+# print('Objective: ' + str(model_gekko.options.objfcnval))
+
+##############################################################################
+# Задача как GEKKO MINLP
+##############################################################################
+model_gekko_minlp = GEKKO(remote = False) # Initialize gekko
+model_gekko_minlp.options.SOLVER = 1  # APOPT is an MINLP solver
+
+# Переменные решения (непрерывные)
+model_gekko_minlp.y = [model_gekko_minlp.Var(value=2, lb=0, ub=10, name="y_0")]
+# Переменные решения (целочисленные)
+model_gekko_minlp.x = [model_gekko_minlp.Var(value=2, lb=0, ub=10, integer=True, name="x_{}".format(i)) for i in [1,2]]
+
+# Линейные ограничения
+model_gekko_minlp.Equation(8 * model_gekko_minlp.y[0] + 14 * model_gekko_minlp.x[0] + 7 * model_gekko_minlp.x[1] - 56 == 0)
+# нелинейные ограничения
+model_gekko_minlp.nlc1 = model_gekko_minlp.Equation(model_gekko_minlp.y[0]**2 + model_gekko_minlp.x[0]**2 + model_gekko_minlp.x[1]**2 <= 25)
+model_gekko_minlp.nlc2 = model_gekko_minlp.Equation(model_gekko_minlp.x[0]**2 + model_gekko_minlp.x[1]**2 <= 12)
+# нелинейная цель
+model_gekko_minlp.Obj(-(1000 - model_gekko_minlp.y[0]**2 - 2*model_gekko_minlp.x[0]**2 - model_gekko_minlp.x[1]**2 - model_gekko_minlp.y[0]*model_gekko_minlp.x[0] - model_gekko_minlp.y[0]*model_gekko_minlp.x[1]))
+
+# model_gekko_minlp.solve(disp=True)
+# print(model_gekko_minlp.y[0].value)
+# print(model_gekko_minlp.x[0].value)
+# print(model_gekko_minlp.x[1].value)
+# print(model_gekko_minlp.options.SOLVESTATUS)
+# print('Objective: ' + str(model_gekko_minlp.options.objfcnval))
+
 ###############################################################################
 # Функция, переводящая переменные решения pyomo в вектор
 def DV_2_vec(model):
@@ -123,6 +168,10 @@ def DV_2_vec_cp_sat(model):
 # Функция, переводящая переменные решения cplex в вектор
 def DV_2_vec_cplex(model):
 	x = [model.get_var_by_index(0), model.get_var_by_index(1), model.get_var_by_index(2)]
+	return x
+
+def DV_2_vec_gekko(model):
+	x = [model.y[0], model.x[0], model.x[1]]
 	return x
 
 # нелинейная выпуклая функция цели
@@ -216,9 +265,51 @@ scipy_projector_optimizer_obj = scipy_projector_optimizer()
 # res
 
 ###############################################################################
+importlib.reload(mg_minlp)
 poa = mg_minlp.mmaxgon_MINLP_POA(
 	eps=1e-6
 )
+
+###############################################################################
+# GEKKO Нелинейная функция цели, есть нелинейные ограничения
+###############################################################################
+gekko_mip_model_wrapper = mg_minlp.gekko_MIP_model_wrapper(
+	model_gekko=model_gekko,
+	if_objective_defined=False
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=gekko_mip_model_wrapper,
+	non_lin_obj_fun=obj,
+	non_lin_constr_fun=non_lin_cons,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_projector_object=None #scipy_projector_optimizer_obj
+)
+print(time() - start_time)
+print(res)
+
+gekko_mip_model_wrapper = mg_minlp.gekko_MIP_model_wrapper(
+	model_gekko=model_gekko_minlp,
+	if_objective_defined=True
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=gekko_mip_model_wrapper,
+	non_lin_obj_fun=None,
+	non_lin_constr_fun=None,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_projector_object=None #scipy_projector_optimizer_obj
+)
+print(time() - start_time)
+print(res)
 
 ###############################################################################
 # CPLEX MP Нелинейная функция цели, есть нелинейные ограничения
