@@ -107,6 +107,29 @@ model_cplex_lin_cons = model_cplex.add(8 * model_cplex_y[0] + 14 * model_cplex_x
 # (sol["y_0"], sol["x_1"], sol["x_2"])
 
 ##############################################################################
+# Задача как CPLEX MINLP
+##############################################################################
+model_cplex_minlp = docplex_mp_model.Model()
+
+# Переменные решения (непрерывные)
+model_cplex_minlp_y = model_cplex_minlp.var_list([0], lb=0, ub=10, vartype=model_cplex_minlp.continuous_vartype, name="y")
+# Переменные решения (целочисленные)
+model_cplex_minlp_x = model_cplex_minlp.var_list([1, 2], lb=0, ub=10, vartype=model_cplex_minlp.integer_vartype, name="x")
+
+# Линейные ограничения
+model_cplex_minlp_lin_cons = model_cplex_minlp.add(8 * model_cplex_minlp_y[0] + 14 * model_cplex_minlp_x[0] + 7 * model_cplex_minlp_x[1] - 56 == 0)
+
+# нелинейные ограничения
+model_cplex_minlp_nlc1 = model_cplex_minlp.add(model_cplex_minlp_y[0]**2 + model_cplex_minlp_x[0]**2 + model_cplex_minlp_x[1]**2 <= 25)
+model_cplex_minlp_nlc2 = model_cplex_minlp.add(model_cplex_minlp_x[0]**2 + model_cplex_minlp_x[1]**2 <= 12)
+# нелинейная цель
+model_cplex_minlp.minimize(-(1000 - model_cplex_minlp_y[0]**2 - 2*model_cplex_minlp_x[0]**2 - model_cplex_minlp_x[1]**2 - model_cplex_minlp_y[0]*model_cplex_minlp_x[0] - model_cplex_minlp_y[0]*model_cplex_minlp_x[1]))
+
+# DV_2_vec_cplex(model_cplex)
+# [v.solution_value for v in DV_2_vec_cplex(model_cplex)]
+# sol = model_cplex_minlp.solve()
+# (sol["y_0"], sol["x_1"], sol["x_2"])
+##############################################################################
 # Задача как GEKKO MILP
 ##############################################################################
 model_gekko = GEKKO(remote = False) # Initialize gekko
@@ -323,6 +346,24 @@ res = poa.solve(
 	MIP_model=cplex_mip_model_wrapper,
 	non_lin_obj_fun=obj,
 	non_lin_constr_fun=non_lin_cons,
+	decision_vars_to_vector_fun=DV_2_vec_cplex,
+	tolerance=1e-1,
+	add_constr="ONE",
+	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_projector_object=scipy_projector_optimizer_obj
+)
+print(time() - start_time)
+print(res)
+
+cplex_mip_model_wrapper = mg_minlp.cplex_MIP_model_wrapper(
+	model_cplex=model_cplex_minlp
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=cplex_mip_model_wrapper,
+	non_lin_obj_fun=None,
+	non_lin_constr_fun=None,
 	decision_vars_to_vector_fun=DV_2_vec_cplex,
 	tolerance=1e-1,
 	add_constr="ONE",
