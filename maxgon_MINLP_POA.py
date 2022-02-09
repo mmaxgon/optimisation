@@ -18,7 +18,8 @@ class pyomo_MIP_model_wrapper:
 		self,
 		pyomo,                         # Объект pyomo.environ
 		pyomo_MIP_model,               # Модель MIP pyomo.ConcreteModel() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно в pyomo
-		mip_solver_name="cbc"          # MIP солвер (может быть MILP или MINLP, умеющий работать с классом задач, описанным в pyomo)
+		mip_solver_name="cbc",         # MIP солвер (может быть MILP или MINLP, умеющий работать с классом задач, описанным в pyomo)
+		mip_solver_options=None
 	):
 		self.__pyomo = pyomo
 		self.__pyomo_MIP_model = copy.deepcopy(pyomo_MIP_model)
@@ -45,6 +46,9 @@ class pyomo_MIP_model_wrapper:
 			self.__pyomo_MIP_model.obj = self.__pyomo.Objective(expr=self.__pyomo_MIP_model.__mu, sense=self.__pyomo.minimize)
 
 		self.__mip_solver = self.__pyomo.SolverFactory(self.__mip_solver_name)
+		if mip_solver_options != None:
+			for key in mip_solver_options.keys():
+				self.__mip_solver.options[key] = mip_solver_options[key]
 
 	# возвращаем модель
 	def get_mip_model(self):

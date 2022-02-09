@@ -48,8 +48,14 @@ model_milp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10),
 # Линейные ограничения
 model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_milp.x[1] + 7 * model_milp.x[2] - 56 == 0)
 
-# model_milp.obj = pyomo.Objective(expr = 0, sense=pyomo.minimize)
-# result = pyomo.SolverFactory("cbc").solve(model_milp)
+# model_milp.obj = pyomo.Objective(expr = -model_milp.x[1], sense=pyomo.minimize)
+# sf = pyomo.SolverFactory("cbc")
+# sf.options["allowableGap"] = 1e-4
+# sf.options["integerTolerance"] = 1e-4
+# sf.options["seconds"] = 1e-1
+# sf.options["outputFormat"] = 0
+# sf.options["printingOptions"] = "all"
+# result = sf.solve(model_milp, tee=True)
 # [model_milp.y[0](), model_milp.x[1](), model_milp.x[1]()]
 # model_milp.del_component(model_milp.obj)
 
@@ -403,7 +409,8 @@ print(res)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc" #"cplex"
+	mip_solver_name="cbc",
+	mip_solver_options={"allowableGap": 1e-1, "integerTolerance": 1e-1, "seconds": 1e-1}
 )
 
 start_time = time()
