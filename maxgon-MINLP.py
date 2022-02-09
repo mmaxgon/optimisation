@@ -548,7 +548,8 @@ model_milp.del_component(model_milp.obj)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_minlp,
-	mip_solver_name="couenne"
+	mip_solver_name="bonmin", #"couenne"
+	mip_solver_options={"bonmin.algorithm":"B-OA"}
 )
 
 start_time = time()
@@ -558,7 +559,8 @@ res8 = poa.solve(
 	non_lin_constr_fun=None,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
-	add_constr="ONE"
+	add_constr="ONE",
+	NLP_refiner_class=scipy_refiner_optimizer
 )
 print(time() - start_time)
 
