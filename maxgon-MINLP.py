@@ -217,6 +217,8 @@ def non_lin_cons_cp_sat(x):
 ###############################################################################
 # scipy
 ###############################################################################
+
+##################################################################################################
 # Класс для уточнения непрерывных переменных решения при фиксации целочисленных
 # Нужен когда непрерывных переменных много
 class scipy_refiner_optimizer:
@@ -259,6 +261,7 @@ class scipy_refiner_optimizer:
 # res = new_scipy_optimizer.get_solution()
 # res
 
+################################################################################################
 # Класс для проекции недопустимого решения на допустимую область с релаксацией целочисленности
 # Нужен для уменьшения итераций по линейной аппроксимации ограничений
 class scipy_projector_optimizer:
@@ -293,6 +296,23 @@ scipy_projector_optimizer_obj = scipy_projector_optimizer()
 # res = scipy_projector_optimizer_obj.get_solution([2, 2.0, 2.0])
 # res
 
+#############################################################################
+# Начальная нижняя граница - решение NLP
+
+res = opt.minimize(
+	fun=obj,
+	bounds=opt.Bounds([0, 0, 0], [10, 10, 10]),
+	constraints=[opt.LinearConstraint([[8, 14, 7]], [56], [56]), opt.NonlinearConstraint(non_lin_cons, -np.inf, 0)],
+	x0=[2,2,2],
+	method="trust-constr",
+	options={'verbose': 0, "maxiter": 100}
+)
+res = {"x": res.x, "obj": res.fun, "success": res.success}
+nlp_lower_bound = copy.copy(res["obj"])
+print(nlp_lower_bound)
+
+###############################################################################
+# Решение
 ###############################################################################
 importlib.reload(mg_minlp)
 poa = mg_minlp.mmaxgon_MINLP_POA(
@@ -316,7 +336,8 @@ res = poa.solve(
 	tolerance=1e-1,
 	add_constr="ALL",
 	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=None #scipy_projector_optimizer_obj
+	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	lower_bound=nlp_lower_bound
 )
 print(time() - start_time)
 print(res)
@@ -354,9 +375,10 @@ res = poa.solve(
 	non_lin_constr_fun=non_lin_cons,
 	decision_vars_to_vector_fun=DV_2_vec_cplex,
 	tolerance=1e-1,
-	add_constr="ONE",
+	add_constr="ALL",
 	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=scipy_projector_optimizer_obj
+	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	lower_bound=nlp_lower_bound
 )
 print(time() - start_time)
 print(res)
@@ -422,9 +444,11 @@ res1 = poa.solve(
 	tolerance=1e-1,
 	add_constr="ONE",
 	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=scipy_projector_optimizer_obj
+	NLP_projector_object=scipy_projector_optimizer_obj,
+	lower_bound=nlp_lower_bound
 )
 print(time() - start_time)
+print(res1)
 
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
@@ -443,6 +467,7 @@ res2 = poa.solve(
 	NLP_projector_object=scipy_projector_optimizer_obj
 )
 print(time() - start_time)
+print(res2)
 
 # без NLP
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(

@@ -41,7 +41,7 @@ class pyomo_MIP_model_wrapper:
 			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
 			self.__pyomo_MIP_model.__mu = self.__pyomo.Var(domain=self.__pyomo.Reals, initialize=0)
 			# На первом шаге накладываем на неё ограничение снизу, чтобы было решение
-			self.__pyomo_MIP_model.__mu_temp_cons = self.__pyomo.Constraint(expr=self.__pyomo_MIP_model.__mu >= -1e6)
+			self.__pyomo_MIP_model.__mu_temp_cons = self.__pyomo.Constraint(expr=self.__pyomo_MIP_model.__mu >= -1e9)
 			# цель MILP
 			self.__pyomo_MIP_model.obj = self.__pyomo.Objective(expr=self.__pyomo_MIP_model.__mu, sense=self.__pyomo.minimize)
 
@@ -148,6 +148,11 @@ class ortools_cp_sat_MIP_model_wrapper:
 
 		self.__model_milp_cpsat_solver = self.__ortools_cp_model.CpSolver()
 		self.__model_milp_cpsat_solver.parameters.max_time_in_seconds = 60.0
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__model_milp_cpsat.NewIntVar(-int(1e9), int(1e9), "mu")
+			# Добавляем цель
+			self.__model_milp_cpsat.Minimize(self.__mu)
 
 	# возвращаем модель
 	def get_mip_model(self):
@@ -163,11 +168,7 @@ class ortools_cp_sat_MIP_model_wrapper:
 
 	# удаляем временные ограничения
 	def del_temp_constr(self):
-		if not self.__if_objective_defined:
-			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__mu = self.__model_milp_cpsat.NewIntVar(-1000000000, 1000000000, "mu")
-			# Добавляем цель
-			self.__model_milp_cpsat.Minimize(self.__mu)
+		return False
 
 	# задана ли функция цели в pyomo
 	def if_objective_defined(self):
@@ -229,6 +230,14 @@ class cplex_MIP_model_wrapper:
 		В этом случае мы будем минимизировать её линейные аппроксимации.
 		"""
 		self.__if_objective_defined = self.__model_cplex.has_objective()
+		# Добавляем цель
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__model_cplex.var(lb=-np.inf, ub=int(1e9), vartype=self.__model_cplex.continuous_vartype, name="mu")
+			# Временное ограничение снизу
+			self.__temp_mu = self.__model_cplex.add(self.__mu >= -int(1e9))
+			# цель
+			self.__model_cplex.minimize(self.__mu)
 
 	# возвращаем модель
 	def get_mip_model(self):
@@ -244,11 +253,12 @@ class cplex_MIP_model_wrapper:
 
 	# удаляем временные ограничения
 	def del_temp_constr(self):
-		# Добавляем цель
 		if not self.__if_objective_defined:
-			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__mu = self.__model_cplex.var(lb=-np.Inf, ub=np.Inf, vartype=self.__model_cplex.continuous_vartype, name="mu")
-			self.__model_cplex.minimize(self.__mu)
+			# Удаляем временное ограничение
+			self.__model_cplex.remove_constraints([self.__temp_mu])
+			print("Deleting temporary constraints..")
+			return True
+		return False
 
 	# задана ли функция цели в pyomo
 	def if_objective_defined(self):
@@ -402,7 +412,8 @@ class mmaxgon_MINLP_POA:
 		tolerance=1e-1,                 # разница между верхней и нижней оценкой оптимальной функции цели
 		add_constr="ALL",               # {"ALL", "ONE"} число нарушенных нелинейных ограничений для которых добавляются линейные ограничения
 		NLP_refiner_class=None, 		# Класс с моделью NLP со всеми нелинейными ограничениями и с функцией цели для уточнения значений непрерывных переменных при фиксации целочисленных
-		NLP_projector_object=None		# Объект класса с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область для последующей построении касательной и линейного ограничения
+		NLP_projector_object=None,		# Объект класса с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область для последующей построении касательной и линейного ограничения
+		lower_bound=None                # Первичная оченка нижней границы решения
 	):
 		# если функция нелинейных ограничений не задана, то ей становится функция-заглушка со значением -1 (т.е. всегда допустимо)
 		if non_lin_constr_fun == None:
@@ -412,7 +423,7 @@ class mmaxgon_MINLP_POA:
 		x_feasible = []
 		goal_best = np.Inf
 		upper_bound = np.Inf
-		lower_bound = -np.Inf
+		lower_bound = -np.Inf if lower_bound == None else lower_bound
 		if_first_feasible = True
 		iter_num = 0
 
@@ -451,7 +462,8 @@ class mmaxgon_MINLP_POA:
 			2. Если строится новая касательная к функции цели, то она тоже добавляется в ограничения, что снова уменьшает
 			допустимую область и может только повысить минимум.
 			"""
-			lower_bound = MIP_model.get_objective_value()
+			print("MIP_model.get_objective_value(): " + str(MIP_model.get_objective_value()))
+			lower_bound = max(lower_bound, MIP_model.get_objective_value())
 
 			# переводим переменные решения в вектор
 			xvars = decision_vars_to_vector_fun(MIP_model.get_mip_model())
