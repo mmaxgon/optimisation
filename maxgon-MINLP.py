@@ -13,6 +13,7 @@ import scipy.optimize as opt
 import pyomo.environ as pyomo
 import ortools.sat.python.cp_model as ortools_cp_model
 import docplex.mp.model as docplex_mp_model
+import docplex.cp.model as docplex_cp_model
 from gekko import GEKKO
 ###############################################################################
 '''
@@ -95,7 +96,7 @@ model_milp_cpsat_lin_cons = model_milp_cpsat.Add(8 * model_milp_cpsat_x[0] + 14 
 # list(map(model_milp_cpsat_solver.Value, [model_milp_cpsat_x[0], model_milp_cpsat_x[1], model_milp_cpsat_x[1]]))
 
 ##############################################################################
-# Задача как CPLEX MP
+# Задача как CPLEX MP MILP
 ##############################################################################
 model_cplex = docplex_mp_model.Model()
 
@@ -113,7 +114,7 @@ model_cplex_lin_cons = model_cplex.add(8 * model_cplex_y[0] + 14 * model_cplex_x
 # (sol["y_0"], sol["x_1"], sol["x_2"])
 
 ##############################################################################
-# Задача как CPLEX MINLP
+# Задача как CPLEX MP MINLP
 ##############################################################################
 model_cplex_minlp = docplex_mp_model.Model()
 
@@ -135,6 +136,48 @@ model_cplex_minlp.minimize(-(1000 - model_cplex_minlp_y[0]**2 - 2*model_cplex_mi
 # [v.solution_value for v in DV_2_vec_cplex(model_cplex)]
 # sol = model_cplex_minlp.solve()
 # (sol["y_0"], sol["x_1"], sol["x_2"])
+
+##############################################################################
+# Задача как CPLEX CP MILP
+##############################################################################
+model_cplex_cp = docplex_cp_model.CpoModel()
+
+# Переменные решения (непрерывные)
+model_cplex_cp.y = model_cplex_cp.integer_var_list(size=1, min=0, max=10, name="y")
+# Переменные решения (целочисленные)
+model_cplex_cp.x = model_cplex_cp.integer_var_list(size=2, min=0, max=10, name="x")
+
+# Линейные ограничения
+model_cplex_cp_lin_cons = model_cplex_cp.add(8 * model_cplex_cp.y[0] + 14 * model_cplex_cp.x[0] + 7 * model_cplex_cp.x[1] - 56 == 0)
+
+# sol = model_cplex_cp.solve()
+# DV_2_vec_gekko(model_cplex_cp)
+# [sol[v.name] for v in DV_2_vec_gekko(model_cplex_cp)]
+# (sol["y_0"], sol["x_0"], sol["x_1"])
+
+##############################################################################
+# Задача как CPLEX CP MINLP
+##############################################################################
+model_cplex_minlp_cp = docplex_cp_model.CpoModel()
+
+# Переменные решения (непрерывные)
+model_cplex_minlp_cp.y = model_cplex_minlp_cp.integer_var_list(size=1, min=0, max=10, name="y")
+# Переменные решения (целочисленные)
+model_cplex_minlp_cp.x = model_cplex_minlp_cp.integer_var_list(size=2, min=0, max=10, name="x")
+
+# Линейные ограничения
+model_cplex_minlp_cp_lin_cons = model_cplex_minlp_cp.add(8 * model_cplex_minlp_cp.y[0] + 14 * model_cplex_minlp_cp.x[0] + 7 * model_cplex_minlp_cp.x[1] - 56 == 0)
+
+# нелинейные ограничения
+model_cplex_minlp_cp_nlc1 = model_cplex_minlp_cp.add(model_cplex_minlp_cp.y[0]**2 + model_cplex_minlp_cp.x[0]**2 + model_cplex_minlp_cp.x[1]**2 <= 25)
+model_cplex_minlp_cp_nlc2 = model_cplex_minlp_cp.add(model_cplex_minlp_cp.x[0]**2 + model_cplex_minlp_cp.x[1]**2 <= 13)
+# нелинейная цель
+model_cplex_minlp_cp.minimize(-(1000 - model_cplex_minlp_cp.y[0]**2 - 2*model_cplex_minlp_cp.x[0]**2 - model_cplex_minlp_cp.x[1]**2 - model_cplex_minlp_cp.y[0]*model_cplex_minlp_cp.x[0] - model_cplex_minlp_cp.y[0]*model_cplex_minlp_cp.x[1]))
+
+# sol = model_cplex_minlp_cp.solve()
+# DV_2_vec_gekko(model_cplex_minlp_cp)
+# [sol[v.name] for v in DV_2_vec_gekko(model_cplex_minlp_cp)]
+# (sol["y_0"], sol["x_0"], sol["x_1"])
 ##############################################################################
 # Задача как GEKKO MILP
 ##############################################################################
@@ -402,6 +445,46 @@ print(time() - start_time)
 print(res)
 
 ###############################################################################
+# CPLEX CP Нелинейная функция цели, есть нелинейные ограничения
+###############################################################################
+cplex_cp_mip_model_wrapper = mg_minlp.cplex_MIP_model_wrapper(
+	model_cplex=model_cplex_cp
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=cplex_cp_mip_model_wrapper,
+	non_lin_obj_fun=obj,
+	non_lin_constr_fun=non_lin_cons_cp_sat,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	lower_bound=nlp_lower_bound
+)
+print(time() - start_time)
+print(res)
+
+cplex_cp_mip_model_wrapper = mg_minlp.cplex_MIP_model_wrapper(
+	model_cplex=model_cplex_minlp_cp
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=cplex_cp_mip_model_wrapper,
+	non_lin_obj_fun=None,
+	non_lin_constr_fun=None,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	lower_bound=nlp_lower_bound
+)
+print(time() - start_time)
+print(res)
+###############################################################################
 # ortools cp_sat Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
 ortools_cp_sat_mip_model_wrapper = mg_minlp.ortools_cp_sat_MIP_model_wrapper(
@@ -486,6 +569,7 @@ res3 = poa.solve(
 	add_constr="ONE"
 )
 print(time() - start_time)
+print(res3)
 
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
@@ -503,6 +587,7 @@ res4 = poa.solve(
 	add_constr="ALL"
 )
 print(time() - start_time)
+print(res4)
 
 print(res1)
 print(res2)
@@ -597,7 +682,7 @@ model_minlp.del_component(model_minlp.obj)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_minlp,
-	mip_solver_name="couenne"
+	mip_solver_name="shot"
 )
 
 start_time = time()

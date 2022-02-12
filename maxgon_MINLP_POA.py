@@ -39,9 +39,9 @@ class pyomo_MIP_model_wrapper:
 		self.__if_objective_defined = (self.__pyomo_MIP_model.nobjectives() > 0)
 		if not self.__if_objective_defined:
 			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__pyomo_MIP_model.__mu = self.__pyomo.Var(domain=self.__pyomo.Reals, initialize=0)
+			self.__pyomo_MIP_model.__mu = self.__pyomo.Var(domain=self.__pyomo.Reals)
 			# На первом шаге накладываем на неё ограничение снизу, чтобы было решение
-			self.__pyomo_MIP_model.__mu_temp_cons = self.__pyomo.Constraint(expr=self.__pyomo_MIP_model.__mu >= -1e9)
+			self.__pyomo_MIP_model.__mu_temp_cons = self.__pyomo.Constraint(expr=self.__pyomo_MIP_model.__mu >= -int(1e9))
 			# цель MILP
 			self.__pyomo_MIP_model.obj = self.__pyomo.Objective(expr=self.__pyomo_MIP_model.__mu, sense=self.__pyomo.minimize)
 
@@ -96,7 +96,7 @@ class pyomo_MIP_model_wrapper:
 		if not self.__if_objective_defined:
 			# На первом шаге накладываем на вспомогательную переменную решений ограничение снизу, чтобы было решение
 			self.del_temp_constr()
-			self.__pyomo_MIP_model.__mu_temp_cons = self.__pyomo.Constraint(expr=self.__pyomo_MIP_model.__mu >= -1e6)
+			self.__pyomo_MIP_model.__mu_temp_cons = self.__pyomo.Constraint(expr=self.__pyomo_MIP_model.__mu >= -int(1e9))
 
 	# добавляем линеаризованные ограничения на функцию цели
 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
@@ -210,13 +210,15 @@ class ortools_cp_sat_MIP_model_wrapper:
 		return True
 
 ####################################################################################################
-# Обёртка описания задачи MIP в виде CPLEX MP
+# Обёртка описания задачи MIP в виде CPLEX MP или CP
 ####################################################################################################
 class cplex_MIP_model_wrapper:
 	def __init__(
 		self,
-		model_cplex              # Модель MIP docplex.mp.model.Model() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
+		model_cplex              # Модель MIP docplex.mp.model.Model() или docplex.cp.model.CpoModel() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
 	):
+		self.__model_type = "cp" if model_cplex.__class__.__name__ == "CpoModel" else "mp"
+		print("model type: " + self.__model_type)
 		self.__model_cplex = copy.deepcopy(model_cplex)
 
 		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
@@ -229,13 +231,17 @@ class cplex_MIP_model_wrapper:
 		Если функции цели в pyomo_MILP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
 		В этом случае мы будем минимизировать её линейные аппроксимации.
 		"""
-		self.__if_objective_defined = self.__model_cplex.has_objective()
+		self.__if_objective_defined = self.__model_cplex.has_objective() if self.__model_type == "mp" else str(self.__model_cplex.get_objective()) != "None"
+		print ("has objective: " + str(self.__if_objective_defined))
 		# Добавляем цель
 		if not self.__if_objective_defined:
 			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__mu = self.__model_cplex.var(lb=-np.inf, ub=int(1e9), vartype=self.__model_cplex.continuous_vartype, name="mu")
-			# Временное ограничение снизу
-			self.__temp_mu = self.__model_cplex.add(self.__mu >= -int(1e9))
+			if self.__model_type == "mp":
+				self.__mu = self.__model_cplex.var(lb=-np.inf, ub=np.inf, vartype=self.__model_cplex.continuous_vartype, name="mu")
+				# Временное ограничение снизу
+				self.__temp_mu = self.__model_cplex.add(self.__mu >= -int(1e9))
+			elif self.__model_type == "cp":
+				self.__mu = self.__model_cplex.integer_var(min=-int(1e9), max=int(1e9), name="mu")
 			# цель
 			self.__model_cplex.minimize(self.__mu)
 
@@ -254,10 +260,11 @@ class cplex_MIP_model_wrapper:
 	# удаляем временные ограничения
 	def del_temp_constr(self):
 		if not self.__if_objective_defined:
-			# Удаляем временное ограничение
-			self.__model_cplex.remove_constraints([self.__temp_mu])
-			print("Deleting temporary constraints..")
-			return True
+			if self.__model_type == "mp":
+				# Удаляем временное ограничение
+				self.__model_cplex.remove_constraints([self.__temp_mu])
+				print("Deleting temporary constraints..")
+				return True
 		return False
 
 	# задана ли функция цели в pyomo
@@ -266,16 +273,28 @@ class cplex_MIP_model_wrapper:
 
 	# значение целевой функции
 	def get_objective_value(self):
-		return self.__model_cplex.objective_value
+		if self.__model_type == "mp":
+			return self.__model_cplex.objective_value
+		else:
+			return self.__results.get_objective_value()
 
 	# значения переменных решения
 	def get_values(self, xvars):
-		return [v.solution_value for v in xvars]
+		if self.__model_type == "mp":
+			return [v.solution_value for v in xvars]
+		else:
+			return [self.__results[v.name] for v in xvars]
 
 	# очищаем аппроксимационные ограничения
 	def clear(self):
-		self.__non_lin_cons.clear()
-		self.__obj_cons.clear()
+		if self.__model_type == "mp":
+			self.__model_cplex.remove_constraints(self.__non_lin_cons)
+			self.__model_cplex.remove_constraints(self.__obj_cons)
+			self.__non_lin_cons.clear()
+			self.__obj_cons.clear()
+			if not self.__if_objective_defined:
+				# Временное ограничение снизу
+				self.__temp_mu = self.__model_cplex.add(self.__mu >= -int(1e9))
 
 	# добавляем линеаризованные ограничения на функцию цели
 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
@@ -294,8 +313,8 @@ class cplex_MIP_model_wrapper:
 		self.__non_lin_cons.append(new_constr)
 
 	def solve(self):
-		results = self.__model_cplex.solve()
-		if not results:
+		self.__results = self.__model_cplex.solve()
+		if not self.__results:
 			return False
 		return True
 
@@ -323,7 +342,7 @@ class gekko_MIP_model_wrapper:
 		self.__if_objective_defined = if_objective_defined
 		if not self.__if_objective_defined:
 			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__mu = self.__model_gekko.Var(value=-1e-6, name="mu")
+			self.__mu = self.__model_gekko.Var(value=-1e-9, name="mu")
 			self.__model_gekko.Obj(self.__mu)
 
 	# возвращаем модель
