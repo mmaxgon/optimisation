@@ -1,7 +1,7 @@
 import time
 import numpy as np
 import cyipopt
-import scipy as sp
+import scipy.optimize as sp
 
 class HS071:
 	def objective(self, x):
@@ -101,7 +101,7 @@ class gini:
 		return np.sum(np.power(x, 2))
 
 	def gradient(self, x):
-		return sp.optimize.approx_fprime(x, self.objective, epsilon = 1e-8)
+		return sp.approx_fprime(x, self.objective, epsilon = 1e-8)
 # 		return np.array(2 * np.array(x))
 	
 	def constraints(self, x):
@@ -113,7 +113,7 @@ class gini:
 		])
 	
 	def jacobian(self, x):
-		return sp.optimize.slsqp.approx_jacobian(x, self.constraints, epsilon = 1e-8)
+		return sp.slsqp.approx_jacobian(x, self.constraints, epsilon = 1e-8)
 		#return np.array([np.ones(len(x)), [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
 
 x0 = [4, 4, 2, 0]
@@ -132,7 +132,7 @@ cu = [10, 0.1, 0.1, 0.1]
 nlp = cyipopt.Problem(
 	n = len(x0),
 	m = len(cl),
-	problem_obj = gini(),
+	problem_obj = gi,
 	lb = lb,
 	ub = ub,
 	cl = cl,
@@ -184,7 +184,7 @@ bounds = np.reshape([0, 10] * n, (n, 2))
 # sp.optimize.show_options(solver = "minimize", method = "trust-constr")
 
 start_time = time.time()
-res = sp.optimize.minimize(
+res = sp.minimize(
 	method = "trust-constr", 
 	options = {'gtol': 1e-4, "xtol": 1e-4},
 	fun = objective,
