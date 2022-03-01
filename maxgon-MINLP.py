@@ -658,6 +658,7 @@ model_milp.del_component(model_milp.obj)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_minlp,
+	# mip_solver_name="cplex",
 	mip_solver_name="bonmin", #"couenne"
 	mip_solver_options={"bonmin.algorithm":"B-OA"}
 )
