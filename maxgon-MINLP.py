@@ -34,18 +34,17 @@ c3: x[2]^2 + x[3]^2 <= 12;
 ##############################################################################
 # Задача как MILP Pyomo
 ##############################################################################
-model_milp = pyomo.ConcreteModel()
-
-# Переменные решения
 # инициализация начального значения
 x = np.array([2]*3)
 def init_integer(model, i):
 	return x[i]
 
+model_milp = pyomo.ConcreteModel()
+
 # целочисленные переменные решения
-model_milp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = init_integer)
+model_milp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = lambda model, i: [4.0, 4.0][i-1])
 # непрерывные переменные решения
-model_milp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = init_integer)
+model_milp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = lambda model, i: [0.][i])
 # Линейные ограничения
 model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_milp.x[1] + 7 * model_milp.x[2] - 56 == 0)
 
@@ -56,7 +55,9 @@ model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_m
 # sf.options["seconds"] = 1e-1
 # sf.options["outputFormat"] = 0
 # sf.options["printingOptions"] = "all"
-# result = sf.solve(model_milp, tee=True)
+# start = time()
+# result = sf.solve(model_milp, tee=False, warmstart=True)
+# print(time() - start)
 # [model_milp.y[0](), model_milp.x[1](), model_milp.x[1]()]
 # model_milp.del_component(model_milp.obj)
 
@@ -65,8 +66,8 @@ model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_m
 ##############################################################################
 model_minlp = pyomo.ConcreteModel()
 # переменные решения
-model_minlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = init_integer)
-model_minlp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = init_integer)
+model_minlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize=2)
+model_minlp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize=1.0)
 # Линейные ограничения
 model_minlp.lin_cons = pyomo.Constraint(expr = 8 * model_minlp.y[0] + 14 * model_minlp.x[1] + 7 * model_minlp.x[2] - 56 == 0)
 # нелинейные ограничения
@@ -75,7 +76,10 @@ model_minlp.nlc2 = pyomo.Constraint(expr = model_minlp.x[1]**2 + model_minlp.x[2
 # нелинейная цель
 model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*model_minlp.x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
 
+# start = time()
+# pyomo.SolverFactory("cplex").solve(model_minlp, warmstart=True)
 # pyomo.SolverFactory("couenne").solve(model_minlp)
+# print(time() - start)
 # [model_minlp.y[0](), model_minlp.x[1](), model_minlp.x[1]()]
 
 ##############################################################################
@@ -378,8 +382,8 @@ res = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec_gekko,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	NLP_refiner_class=scipy_refiner_optimizer,
+	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 )
 print(time() - start_time)
@@ -459,8 +463,8 @@ res = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec_gekko,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	NLP_refiner_class=scipy_refiner_optimizer,
+	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 )
 print(time() - start_time)

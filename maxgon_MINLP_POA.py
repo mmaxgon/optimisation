@@ -115,7 +115,11 @@ class pyomo_MIP_model_wrapper:
 		)
 
 	def solve(self):
-		results = self.__mip_solver.solve(self.__pyomo_MIP_model, tee=False)
+		if self.__mip_solver_name.upper() in ["CBC", "CPLEX"]:
+			print("warm start")
+			results = self.__mip_solver.solve(self.__pyomo_MIP_model, warmstart=True, tee=False)
+		else:
+			results = self.__mip_solver.solve(self.__pyomo_MIP_model, tee=False)
 		if results.Solver()["Termination condition"] == self.__pyomo.TerminationCondition.infeasible:
 			return False
 		return True
@@ -565,11 +569,13 @@ class mmaxgon_MINLP_POA:
 				print("Not feasible")
 				# значения нарушенных ограничений
 				gx_violated = np.array(gx)[ix_violated]
+				if_recalc = False
 				# если нарушенных ограничений несколько, а мы должны выбрать только одно
 				if gx_violated.shape[0] > 1 and add_constr == "ONE":
 					# оставляем только индекс с максимальным нарушением ограничения
 					ix_most_violated = np.argmax(gx_violated)
 					ix_violated = [ix_violated[ix_most_violated]]
+					if_recalc = True    # поменялось множество индексов ix_violated
 
 				if NLP_projector_object != None:
 					res = NLP_projector_object.get_solution(x)
@@ -578,8 +584,10 @@ class mmaxgon_MINLP_POA:
 						print("После проецирования:\r\n")
 						print(x)
 						gx = non_lin_constr_fun(x)
+						if_recalc = True    # поменялись значения ограничений gx
 
-				gx_violated = np.array(gx)[ix_violated]
+				if if_recalc:
+					gx_violated = np.array(gx)[ix_violated]
 				# добавляем линеаризацию нарушенных нелинейных ограничений
 				gradg_violated = self.__get_linear_appr_matrix(lambda x: np.array(non_lin_constr_fun(x))[ix_violated], x)
 				xgradg_violated = np.matmul(gradg_violated, x)
