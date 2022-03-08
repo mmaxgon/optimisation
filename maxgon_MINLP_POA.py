@@ -1,6 +1,7 @@
 ####################################################################################################
 # MINLP with Polyhedral Outer Approximation
 ####################################################################################################
+from collections import namedtuple
 import copy
 import numpy as np
 import scipy.optimize as opt
@@ -9,6 +10,128 @@ import scipy.optimize as opt
 # import ortools.sat.python.cp_model as ortools_cp_model
 # import docplex.mp.model as docplex_mp_model
 # from gekko import GEKKO
+
+####################################################################################################
+# Объекты абстрактного описания задачи
+####################################################################################################
+
+# Границы
+bounds = namedtuple("bounds", ["lb", "ub"])
+# Переменные решения
+dvars = namedtuple("dvars", ["n", "ix_int", "ix_cont", "bounds", "x0"])
+# Цель
+objective = namedtuple("objective", ["n", "fun"])
+# Линейные ограничения
+linear_constraints = namedtuple("linear_constraints", ["m", "A", "bounds"])
+# Нелинейные ограничения
+nonlinear_constraints = namedtuple("nonlinear_constraints", ["m", "fun", "bounds"])
+# Описание оптимизационной задачи
+optimization_problem = namedtuple("optimization_problem", ["dvars", "objective", "linear_constraints", "nonlinear_constraints"])
+
+####################################################################################################
+# Получение нижней границы решения
+####################################################################################################
+def get_NLP_lower_bound(opt_prob):
+	res = opt.minimize(
+		fun=opt_prob.objective.fun,
+		bounds=opt.Bounds(opt_prob.dvars.bounds.lb, opt_prob.dvars.bounds.ub),
+		constraints=[
+			opt.LinearConstraint(
+				opt_prob.linear_constraints.A,
+				opt_prob.linear_constraints.bounds.lb,
+				opt_prob.linear_constraints.bounds.ub
+			),
+			opt.NonlinearConstraint(
+				opt_prob.nonlinear_constraints.fun,
+				opt_prob.nonlinear_constraints.bounds.lb,
+				opt_prob.nonlinear_constraints.bounds.ub
+			)
+		],
+		x0=opt_prob.dvars.x0,
+		method="trust-constr",
+		options={'verbose': 0, "maxiter": 200}
+	)
+	res = {"x": res.x, "obj": res.fun, "success": res.success}
+	return res
+
+####################################################################################################
+# Уточнение непрерывных компонент решения при фиксации целочисленных
+####################################################################################################
+
+# Класс для уточнения непрерывных переменных решения при фиксации целочисленных
+# Нужен когда непрерывных переменных много: для уточнения верхней границы, для перевода решения в допустимую область
+class scipy_refiner_optimizer:
+	def __init__(self, opt_prob):
+		# сохраняем начальное описание задачи
+		self.__opt_prob = opt_prob
+
+	# решение по непрерывным переменным
+	def get_solution(self, x0):
+		# фиксируем целочисленные переменные
+		lb = np.array(self.__opt_prob.dvars.bounds.lb)
+		ub = np.array(self.__opt_prob.dvars.bounds.ub)
+		lb[self.__opt_prob.dvars.ix_int] = np.array(x0)[self.__opt_prob.dvars.ix_int]
+		ub[self.__opt_prob.dvars.ix_int] = np.array(x0)[self.__opt_prob.dvars.ix_int]
+		res = opt.minimize(
+			fun=self.__opt_prob.objective.fun,
+			bounds=opt.Bounds(lb, ub),
+			constraints=[
+				opt.LinearConstraint(
+					self.__opt_prob.linear_constraints.A,
+					self.__opt_prob.linear_constraints.bounds.lb,
+					self.__opt_prob.linear_constraints.bounds.ub
+				),
+				opt.NonlinearConstraint(
+					self.__opt_prob.nonlinear_constraints.fun,
+					self.__opt_prob.nonlinear_constraints.bounds.lb,
+					self.__opt_prob.nonlinear_constraints.bounds.ub
+				)
+			],
+			x0=x0,
+			method="trust-constr",
+			options={'verbose': 0, "maxiter": 200}
+		)
+		res = {"x": res.x, "obj": res.fun, "success": res.success}
+		return res
+
+####################################################################################################
+# Проекция недопустимой точки на допустимую область
+####################################################################################################
+
+# Класс для проекции недопустимого решения на допустимую область с релаксацией целочисленности
+# Нужен для уменьшения итераций по линейной аппроксимации ограничений
+class scipy_projector_optimizer:
+	def __init__(self, opt_prob):
+		# сохраняем начальное описание задачи
+		self.__opt_prob = opt_prob
+
+	# Проецируем x на допустимую область
+	def get_solution(self, x0):
+		# цель - расстояние до допустимой области
+		def proj_obj(x):
+			return sum((x[i] - x0[i]) ** 2 for i in range(self.__opt_prob.dvars.n))
+
+		res = opt.minimize(
+			fun=proj_obj,
+			bounds=opt.Bounds(self.__opt_prob.dvars.bounds.lb, self.__opt_prob.dvars.bounds.ub),
+			constraints=[
+				opt.LinearConstraint(
+					self.__opt_prob.linear_constraints.A,
+					self.__opt_prob.linear_constraints.bounds.lb,
+					self.__opt_prob.linear_constraints.bounds.ub
+				),
+				opt.NonlinearConstraint(
+					self.__opt_prob.nonlinear_constraints.fun,
+					self.__opt_prob.nonlinear_constraints.bounds.lb,
+					self.__opt_prob.nonlinear_constraints.bounds.ub
+				)
+			],
+			x0=self.__opt_prob.dvars.x0,
+			method="trust-constr",
+			options={'verbose': 0, "maxiter": 200}
+		)
+		res = {"x": res.x, "obj": res.fun, "success": res.success}
+		return res
 
 ####################################################################################################
 # Обёртка описания задачи MIP в виде pyomo
@@ -466,7 +589,7 @@ class mmaxgon_MINLP_POA:
 		decision_vars_to_vector_fun,    # Функция, комбинирующая переменные решения Pyomo в list
 		tolerance=1e-1,                 # разница между верхней и нижней оценкой оптимальной функции цели
 		add_constr="ALL",               # {"ALL", "ONE"} число нарушенных нелинейных ограничений для которых добавляются линейные ограничения
-		NLP_refiner_class=None, 		# Класс с моделью NLP со всеми нелинейными ограничениями и с функцией цели для уточнения значений непрерывных переменных при фиксации целочисленных
+		NLP_refiner_object=None, 		# Объект класса с моделью NLP со всеми нелинейными ограничениями и с функцией цели для уточнения значений непрерывных переменных при фиксации целочисленных
 		NLP_projector_object=None,		# Объект класса с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область для последующей построении касательной и линейного ограничения
 		lower_bound=None,               # Первичная оченка нижней границы решения
 		custom_constraints_list=[]      # Список выражений для дополнительных (не заданных в модели) ограничений для данного решения
@@ -527,7 +650,7 @@ class mmaxgon_MINLP_POA:
 			2. Если строится новая касательная к функции цели, то она тоже добавляется в ограничения, что снова уменьшает
 			допустимую область и может только повысить минимум.
 			"""
-			# print("MIP_model.get_objective_value(): " + str(MIP_model.get_objective_value()))
+			print("MIP_model.get_objective_value(): " + str(MIP_model.get_objective_value()))
 			lower_bound = max(lower_bound, MIP_model.get_objective_value())
 
 			# переводим переменные решения в вектор
@@ -536,9 +659,8 @@ class mmaxgon_MINLP_POA:
 			print(x)
 
 			# уточняем непрерывные переменные решения
-			if NLP_refiner_class != None:
-				new_refiner_model = NLP_refiner_class(x)
-				res = new_refiner_model.get_solution()
+			if NLP_refiner_object != None:
+				res = NLP_refiner_object.get_solution(x)
 				if res["success"]:
 					x = copy.copy(res["x"])
 					print("После уточнения:\r\n")

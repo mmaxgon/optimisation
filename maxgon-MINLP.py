@@ -5,6 +5,7 @@ importlib.reload(mg_minlp)
 ####################################################################################################
 # MINLP with Polyhedral Outer Approximation
 ####################################################################################################
+from collections import namedtuple
 import copy
 from time import time
 import numpy as np
@@ -31,22 +32,99 @@ s.t. c1: 8*x[1] + 14*x[2] + 7*x[3] - 56 = 0;
 s.t. c2: x[1]^2 + x[2]^2 + x[3]^2 - 25 <= 0;
 c3: x[2]^2 + x[3]^2 <= 12;	
 '''
+
+####################################################################################################
+# Абстрактное описание задачи
+####################################################################################################
+# Начальное значение
+x0 = [2]*3
+# Переменные решения
+decision_vars = mg_minlp.dvars(3, [1, 2], [0], mg_minlp.bounds([0, 0, 0], [10, 10, 10]), x0)
+
+# Целевая функция
+def obj(x):
+	return -(1000 - x[0]**2 - 2*x[1]**2 - x[2]**2 - x[0]*x[1] - x[0]*x[2])
+objective_fun = mg_minlp.objective(3, obj)
+
+# Нелинейные ограничения
+def non_lin_cons_fun(x):
+	return [
+			x[0]**2 + x[1]**2 + x[2]**2 - 25,
+			x[1]**2 + x[2]**2 - 12
+		]
+non_lin_cons = mg_minlp.nonlinear_constraints(
+		2,
+		non_lin_cons_fun,
+		mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
+	)
+
+# Нелинейные ограничения для целиком целочисленной задачи
+def non_lin_cons_fun_cp(x):
+	return [
+			x[0]**2 + x[1]**2 + x[2]**2 - 25,
+			x[1]**2 + x[2]**2 - 13
+		]
+non_lin_cons_cp = mg_minlp.nonlinear_constraints(
+		2,
+		non_lin_cons_fun_cp,
+		mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
+	)
+
+# Линейные ограничения
+lin_cons = mg_minlp.linear_constraints(
+		1,
+		[
+			[8, 14, 7]
+		],
+		mg_minlp.bounds([56], [56])
+	)
+
+opt_prob = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons)
+opt_prob_cp = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons_cp)
+
+####################################################################################################
+# Получение нижней границы решения
+####################################################################################################
+# Нижняя граница как решение NLP-задачи
+res_NLP = mg_minlp.get_NLP_lower_bound(opt_prob)
+print(res_NLP)
+nlp_lower_bound = res_NLP["obj"]
+
+####################################################################################################
+# Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
+####################################################################################################
+
+scipy_refiner_optimizer_obj = mg_minlp.scipy_refiner_optimizer(opt_prob)
+# refine = scipy_refiner_optimizer_obj.get_solution([2,2,2])
+# print(refine)
+
+####################################################################################################
+# Объект, проецирующий недопустимое решение на допустимую область
+####################################################################################################
+scipy_projector_optimizer_obj = mg_minlp.scipy_projector_optimizer(opt_prob)
+# project = scipy_projector_optimizer_obj.get_solution([5, 6, 7])
+# print(project)
+
 ##############################################################################
 # Задача как MILP Pyomo
 ##############################################################################
 # инициализация начального значения
-x = np.array([2]*3)
 def init_integer(model, i):
-	return x[i]
+	return opt_prob.dvars.x0[i]
+
+def get_bounds(model, i):
+	return (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i])
 
 model_milp = pyomo.ConcreteModel()
 
 # целочисленные переменные решения
-model_milp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize = lambda model, i: [4.0, 4.0][i-1])
+model_milp.x = pyomo.Var([1, 2], domain=pyomo.NonNegativeIntegers, bounds=get_bounds, initialize = init_integer)
 # непрерывные переменные решения
-model_milp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize = lambda model, i: [0.][i])
+model_milp.y = pyomo.Var([0], domain=pyomo.NonNegativeReals, bounds=get_bounds, initialize=init_integer)
 # Линейные ограничения
-model_milp.lin_cons = pyomo.Constraint(expr = 8 * model_milp.y[0] + 14 * model_milp.x[1] + 7 * model_milp.x[2] - 56 == 0)
+model_milp.lin_cons = pyomo.Constraint(expr=
+	opt_prob.linear_constraints.A[0][0] * model_milp.y[0] +
+	sum(opt_prob.linear_constraints.A[0][i] * model_milp.x[i] for i in opt_prob.dvars.ix_int) == opt_prob.linear_constraints.bounds.ub[0])
 
 # model_milp.obj = pyomo.Objective(expr = -model_milp.x[1], sense=pyomo.minimize)
 # sf = pyomo.SolverFactory("cbc")
@@ -283,115 +361,6 @@ def DV_2_vec_gekko(model):
 	x = [model.y[0], model.x[0], model.x[1]]
 	return x
 
-# нелинейная выпуклая функция цели
-def obj(x):
-	return -(1000 - x[0]**2 - 2*x[1]**2 - x[2]**2 - x[0]*x[1] - x[0]*x[2])
-
-# нелинейные ограничения - неравенства
-def non_lin_cons(x):
-	return [x[0]**2 + x[1]**2 + x[2]**2 - 25, x[1]**2 + x[2]**2 - 12]
-
-def non_lin_cons_cp_sat(x):
-	return [x[0]**2 + x[1]**2 + x[2]**2 - 25, x[1]**2 + x[2]**2 - 13]
-
-###############################################################################
-# scipy
-###############################################################################
-
-##################################################################################################
-# Класс для уточнения непрерывных переменных решения при фиксации целочисленных
-# Нужен когда непрерывных переменных много
-class scipy_refiner_optimizer:
-	# x - вектор переменных решения как непрерывных, так и целочисленных
-	# мы фиксируем целочисленные и оптимизируем непрерывные
-	def __init__(self, x):
-		# фиксированные дискретные переменные
-		self.x = [x[1], x[2]]
-		# начальные значения непрерывных переменных
-		self.y0 = self.get_cont_vars(x)
-		# границы на непрерывные переменные
-		self.bounds = opt.Bounds([0], [10])
-		# линейные ограничения на непрерывные переменные (дискретные фиксированы и идут в правую часть)
-		self.linear_constraint = opt.LinearConstraint([[8]], [56-14*self.x[0]-7*self.x[1]], [56-14*self.x[0]-7*self.x[1]])
-		# нелинейные ограничения на непрерывные переменные (дискретные фиксированы и идут в правую часть)
-		self.nonlinear_constraint = opt.NonlinearConstraint(lambda x: non_lin_cons(self.get_all_vars(x)), -np.inf, 0)
-
-	# из вектора переменных решений получаем только непрерывные
-	def get_cont_vars(self, x):
-		return x[0]
-	# непрерывные переменные решения конкатенируем с целыми - получаем полный вектор всех переменных решения
-	def get_all_vars(self, x):
-		return [x[0], self.x[0], self.x[1]]
-	# целевая функция от непрерывных переменных с фикисированными целыми
-	def get_goal(self, x):
-		return obj(self.get_all_vars(x))
-	# решение по непрерывным переменным
-	def get_solution(self):
-		res = opt.minimize(
-			fun=self.get_goal,
-			bounds=self.bounds,
-			constraints=[self.linear_constraint, self.nonlinear_constraint],
-			x0=self.y0,
-			method="trust-constr",
-			options = {'verbose': 0, "maxiter": 10}
-		)
-		res = {"x": self.get_all_vars(res.x), "obj": res.fun, "success": res.success}
-		return res
-# new_scipy_optimizer = scipy_refiner_optimizer([1.75, 2.0, 2.0])
-# res = new_scipy_optimizer.get_solution()
-# res
-
-################################################################################################
-# Класс для проекции недопустимого решения на допустимую область с релаксацией целочисленности
-# Нужен для уменьшения итераций по линейной аппроксимации ограничений
-class scipy_projector_optimizer:
-	# x - проецируемый недопустимый вектор
-	def __init__(self):
-		# границы на все переменные
-		self.bounds = opt.Bounds([0, 0, 0], [10, 10, 10])
-		# линейные ограничения
-		self.linear_constraint = opt.LinearConstraint([[8, 14, 7]], [56], [56])
-		# нелинейные ограничения
-		self.nonlinear_constraint = opt.NonlinearConstraint(non_lin_cons, -np.inf, 0)
-
-	# Проецируем x на допустимую область
-	def get_solution(self, x):
-		# начальный вектор переменных решения
-		x0 = copy.copy(x)
-		# целевая функция - расстояние до допустимого множества
-		def get_goal(x):
-			return sum((x[i] - x0[i]) ** 2 for i in range(len(x)))
-		res = opt.minimize(
-			fun=get_goal,
-			bounds=self.bounds,
-			constraints=[self.linear_constraint, self.nonlinear_constraint],
-			x0=x0,
-			method="trust-constr",
-			options = {'verbose': 0, "maxiter": 100}
-		)
-		res = {"x": res.x, "obj": res.fun, "success": res.success}
-		return res
-
-scipy_projector_optimizer_obj = scipy_projector_optimizer()
-# res = scipy_projector_optimizer_obj.get_solution([2, 2.0, 2.0])
-# res
-
-#############################################################################
-# Начальная нижняя граница - решение NLP
-#############################################################################
-
-res = opt.minimize(
-	fun=obj,
-	bounds=opt.Bounds([0, 0, 0], [10, 10, 10]),
-	constraints=[opt.LinearConstraint([[8, 14, 7]], [56], [56]), opt.NonlinearConstraint(non_lin_cons, -np.inf, 0)],
-	x0=[2,2,2],
-	method="trust-constr",
-	options={'verbose': 0, "maxiter": 100}
-)
-res = {"x": res.x, "obj": res.fun, "success": res.success}
-nlp_lower_bound = copy.copy(res["obj"])
-print(nlp_lower_bound)
-
 ###############################################################################
 # Решение
 ###############################################################################
@@ -455,13 +424,13 @@ cplex_mip_model_wrapper = mg_minlp.cplex_MIP_model_wrapper(
 start_time = time()
 res = poa.solve(
 	MIP_model=cplex_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec_cplex,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
+	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[cplex_mip_model_wrapper.get_mip_model().get_var_by_index(0) >= 1]
 )
@@ -471,13 +440,13 @@ print(res)
 start_time = time()
 res = poa.solve(
 	MIP_model=cplex_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec_cplex,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
+	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[cplex_mip_model_wrapper.get_mip_model().get_var_by_index(0) >= 2]
 )
@@ -487,13 +456,13 @@ print(res)
 start_time = time()
 res = poa.solve(
 	MIP_model=cplex_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec_cplex,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
-	NLP_projector_object=None, #scipy_projector_optimizer_obj
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
+	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[]
 )
@@ -512,7 +481,7 @@ res = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec_cplex,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_refiner_object=None, #scipy_refiner_optimizer_obj,
 	NLP_projector_object=scipy_projector_optimizer_obj
 )
 print(time() - start_time)
@@ -528,12 +497,11 @@ cplex_cp_mip_model_wrapper = mg_minlp.cplex_MIP_model_wrapper(
 start_time = time()
 res = poa.solve(
 	MIP_model=cplex_cp_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons_cp_sat,
+	non_lin_obj_fun=opt_prob_cp.objective.fun,
+	non_lin_constr_fun=opt_prob_cp.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec_gekko,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=scipy_refiner_optimizer,
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[cplex_cp_mip_model_wrapper.get_mip_model().y[0] == 0]
@@ -547,12 +515,11 @@ cplex_cp_mip_model_wrapper = mg_minlp.cplex_MIP_model_wrapper(
 start_time = time()
 res = poa.solve(
 	MIP_model=cplex_cp_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons_cp_sat,
+	non_lin_obj_fun=opt_prob_cp.objective.fun,
+	non_lin_constr_fun=opt_prob_cp.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec_gekko,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=scipy_refiner_optimizer,
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[]
@@ -572,7 +539,6 @@ res = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec_gekko,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
 	NLP_projector_object=None, #scipy_projector_optimizer_obj
 	lower_bound=nlp_lower_bound
 )
@@ -591,12 +557,11 @@ ortools_cp_sat_mip_model_wrapper = mg_minlp.ortools_cp_sat_MIP_model_wrapper(
 start_time = time()
 res = poa.solve(
 	MIP_model=ortools_cp_sat_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons_cp_sat,
+	non_lin_obj_fun=opt_prob_cp.objective.fun,
+	non_lin_constr_fun=opt_prob_cp.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec_cp_sat,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None,
 	NLP_projector_object=scipy_projector_optimizer_obj
 	,custom_constraints_list=[ortools_cp_sat_mip_model_wrapper.get_mip_model().GetIntVarFromProtoIndex(0) == 0]
 )
@@ -611,12 +576,11 @@ ortools_cp_sat_mip_model_wrapper = mg_minlp.ortools_cp_sat_MIP_model_wrapper(
 start_time = time()
 res = poa.solve(
 	MIP_model=ortools_cp_sat_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons_cp_sat,
+	non_lin_obj_fun=opt_prob_cp.objective.fun,
+	non_lin_constr_fun=opt_prob_cp.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec_cp_sat,
 	tolerance=1e-1,
 	add_constr="ALL",
-	NLP_refiner_class=None,
 	NLP_projector_object=scipy_projector_optimizer_obj
 )
 print(time() - start_time)
@@ -637,12 +601,12 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 start_time = time()
 res1 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_refiner_object=None, #scipy_refiner_optimizer,
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[pyomo_mip_model_wrapper.get_mip_model().y[0]>=1]
@@ -653,12 +617,12 @@ print(res1)
 start_time = time()
 res1 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[pyomo_mip_model_wrapper.get_mip_model().y[0]>=2]
@@ -669,12 +633,12 @@ print(res1)
 start_time = time()
 res1 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[pyomo_mip_model_wrapper.get_mip_model().y[0]>=1, pyomo_mip_model_wrapper.get_mip_model().y[0]<=2]
@@ -685,12 +649,12 @@ print(res1)
 start_time = time()
 res1 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_class=None, #scipy_refiner_optimizer,
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 )
@@ -705,12 +669,12 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 start_time = time()
 res2 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ALL",
-	# NLP_refiner_class=scipy_refiner_optimizer,
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
 	NLP_projector_object=scipy_projector_optimizer_obj
 )
 print(time() - start_time)
@@ -726,8 +690,8 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 start_time = time()
 res3 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE"
@@ -744,8 +708,8 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 start_time = time()
 res4 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ALL"
@@ -768,7 +732,7 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 )
 res5 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
+	non_lin_obj_fun=opt_prob.objective.fun,
 	non_lin_constr_fun=None,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
@@ -788,7 +752,7 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 res6 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
 	non_lin_obj_fun=None,
-	non_lin_constr_fun=non_lin_cons,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ALL"
@@ -835,7 +799,7 @@ res8 = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_class=scipy_refiner_optimizer
+	NLP_refiner_object=scipy_refiner_optimizer_obj
 )
 print(time() - start_time)
 
@@ -853,7 +817,7 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 start_time = time()
 res9 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
-	non_lin_obj_fun=obj,
+	non_lin_obj_fun=opt_prob.objective.fun,
 	non_lin_constr_fun=None,
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
