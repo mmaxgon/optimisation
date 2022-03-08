@@ -27,8 +27,10 @@ class pyomo_MIP_model_wrapper:
 
 		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
 		self.__pyomo_MIP_model.__non_lin_cons = self.__pyomo.ConstraintList()
-		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
+		# ограничения на функцию цели (линейная аппроксимация функции цели, добавляется после каждой итерации)
 		self.__pyomo_MIP_model.__obj_cons = self.__pyomo.ConstraintList()
+		# дополнительные пользовательские ограничения
+		self.__pyomo_MIP_model.__custom_cons = self.__pyomo.ConstraintList()
 
 		"""
 		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
@@ -89,10 +91,11 @@ class pyomo_MIP_model_wrapper:
 	def get_values(self, xvars):
 		return list(map(self.__pyomo.value, xvars))
 
-	# очищаем аппроксимационные ограничения
+	# очищаем аппроксимационные и пользовательские ограничения
 	def clear(self):
 		self.__pyomo_MIP_model.__non_lin_cons.clear()
 		self.__pyomo_MIP_model.__obj_cons.clear()
+		self.__pyomo_MIP_model.__custom_cons.clear()
 		if not self.__if_objective_defined:
 			# На первом шаге накладываем на вспомогательную переменную решений ограничение снизу, чтобы было решение
 			self.del_temp_constr()
@@ -100,19 +103,23 @@ class pyomo_MIP_model_wrapper:
 
 	# добавляем линеаризованные ограничения на функцию цели
 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
-		self.__pyomo_MIP_model.__obj_cons.add(
+		expr = \
 			fx - \
 			xgradf + \
 			sum(xvars[i] * gradf[i] for i in range(len(xvars))) <= self.__pyomo_MIP_model.__mu
-		)
+		self.__pyomo_MIP_model.__obj_cons.add(expr)
 
 	# добавляем лианеризованные ограничения на нарушенные ограничения
 	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
-		self.__pyomo_MIP_model.__non_lin_cons.add(
+		expr = \
 			gx_violated[k] - \
 			xgradg_violated[k] + \
 			sum(xvars[i] * gradg_violated[k][i] for i in range(len(xvars))) <= 0
-		)
+		self.__pyomo_MIP_model.__non_lin_cons.add(expr)
+
+	# добавляем дополнительное пользовательское ограничение
+	def add_custom_constr(self, expr):
+		self.__pyomo_MIP_model.__custom_cons.add(expr)
 
 	def solve(self):
 		if self.__mip_solver_name.upper() in ["CBC", "CPLEX"]:
@@ -142,6 +149,8 @@ class ortools_cp_sat_MIP_model_wrapper:
 		self.__non_lin_cons = []
 		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
 		self.__obj_cons = []
+		# пользовательские ограничения (для разбиения допустимого множества)
+		self.__custom_cons = []
 
 		"""
 		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
@@ -190,6 +199,7 @@ class ortools_cp_sat_MIP_model_wrapper:
 	def clear(self):
 		self.__non_lin_cons.clear()
 		self.__obj_cons.clear()
+		self.__custom_cons.clear()
 
 	# добавляем линеаризованные ограничения на функцию цели
 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
@@ -206,6 +216,11 @@ class ortools_cp_sat_MIP_model_wrapper:
 			sum(xvars[i] * int(np.round(self.__BIG_MULT*gradg_violated[k][i])) for i in range(len(xvars))) <= 0
 		new_constr = self.__model_milp_cpsat.Add(expr)
 		self.__non_lin_cons.append(new_constr)
+
+	# добавляем пользовательские ограничения
+	def add_custom_constr(self, expr):
+		new_constr = self.__model_milp_cpsat.Add(expr)
+		self.__custom_cons.append(new_constr)
 
 	def solve(self):
 		results = self.__model_milp_cpsat_solver.Solve(self.__model_milp_cpsat)
@@ -227,8 +242,10 @@ class cplex_MIP_model_wrapper:
 
 		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
 		self.__non_lin_cons = []
-		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
+		# ограничения на функцию цели (линейная аппроксимация после каждой итерации)
 		self.__obj_cons = []
+		# дополнительные ограничения (для работы с подмножеством допустимого множества)
+		self.__custom_cons = []
 
 		"""
 		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
@@ -294,8 +311,10 @@ class cplex_MIP_model_wrapper:
 		if self.__model_type == "mp":
 			self.__model_cplex.remove_constraints(self.__non_lin_cons)
 			self.__model_cplex.remove_constraints(self.__obj_cons)
+			self.__model_cplex.remove_constraints(self.__custom_cons)
 			self.__non_lin_cons.clear()
 			self.__obj_cons.clear()
+			self.__custom_cons.clear()
 			if not self.__if_objective_defined:
 				# Временное ограничение снизу
 				self.__temp_mu = self.__model_cplex.add(self.__mu >= -int(1e9))
@@ -316,6 +335,11 @@ class cplex_MIP_model_wrapper:
 		new_constr = self.__model_cplex.add(expr)
 		self.__non_lin_cons.append(new_constr)
 
+	# добавляем дополнительное пользовательское ограничение
+	def add_custom_constr(self, expr):
+		cust_constr = self.__model_cplex.add(expr)
+		self.__custom_cons.append(cust_constr)
+
 	def solve(self):
 		self.__results = self.__model_cplex.solve()
 		if not self.__results:
@@ -323,86 +347,94 @@ class cplex_MIP_model_wrapper:
 		return True
 
 ####################################################################################################
-# Обёртка описания задачи MIP в виде GEKKO
+# Обёртка описания задачи MIP в виде GEKKO -- ПОХОЖЕ НЕ РАБОТАЕТ
 ####################################################################################################
-class gekko_MIP_model_wrapper:
-	def __init__(
-		self,
-		model_gekko,  # Модель MIP GEKKO() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
-		if_objective_defined
-	):
-		self.__model_gekko = copy.deepcopy(model_gekko)
-
-		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
-		self.__non_lin_cons = []
-		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
-		self.__obj_cons = []
-
-		"""
-		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
-		Если функции цели в pyomo_MILP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
-		В этом случае мы будем минимизировать её линейные аппроксимации.
-		"""
-		self.__if_objective_defined = if_objective_defined
-		if not self.__if_objective_defined:
-			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
-			self.__mu = self.__model_gekko.Var(value=-1e-9, name="mu")
-			self.__model_gekko.Obj(self.__mu)
-
-	# возвращаем модель
-	def get_mip_model(self):
-		return self.__model_gekko
-
-	# возвращаем число аппроксимаций функции цели
-	def get_object_cuts_num(self):
-		return len(self.__obj_cons)
-
-	# возвращаем число аппроксимаций нелинейных ограничений
-	def get_non_lin_constr_cuts_num(self):
-		return len(self.__obj_cons)
-
-	# удаляем временные ограничения
-	def del_temp_constr(self):
-		return False
-
-	# задана ли функция цели в pyomo
-	def if_objective_defined(self):
-		return self.__if_objective_defined
-
-	# значение целевой функции
-	def get_objective_value(self):
-		return self.__model_gekko.options.objfcnval
-
-	# значения переменных решения
-	def get_values(self, xvars):
-		return [v.value[0] for v in xvars]
-
-	# очищаем аппроксимационные ограничения
-	def clear(self):
-		self.__non_lin_cons.clear()
-		self.__obj_cons.clear()
-
-	# добавляем линеаризованные ограничения на функцию цели
-	def add_obj_constr(self, fx, gradf, xgradf, xvars):
-		expr = fx - \
-			xgradf + \
-			sum(xvars[i] * gradf[i] for i in range(len(xvars))) <= self.__mu
-		new_constr = self.__model_gekko.Equation(expr)
-		self.__obj_cons.append(new_constr)
-
-	# добавляем лианеризованные ограничения на нарушенные ограничения
-	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
-		expr = gx_violated[k] - \
-			xgradg_violated[k] + \
-			sum(xvars[i] * gradg_violated[k][i] for i in range(len(xvars))) <= 0
-		new_constr = self.__model_gekko.Equation(expr)
-		self.__non_lin_cons.append(new_constr)
-
-	def solve(self):
-		results = self.__model_gekko.solve(disp=False)
-		if self.__model_gekko.options.SOLVESTATUS != 1:
-			return False
-		return True
+# class gekko_MIP_model_wrapper:
+# 	def __init__(
+# 		self,
+# 		model_gekko,  # Модель MIP GEKKO() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
+# 		if_objective_defined
+# 	):
+# 		self.__model_gekko = copy.deepcopy(model_gekko)
+#
+# 		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
+# 		self.__non_lin_cons = []
+# 		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
+# 		self.__obj_cons = []
+# 		# пользовательские ограничения для сужения допустимой области
+# 		self.__custom_cons = []
+#
+# 		"""
+# 		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
+# 		Если функции цели в pyomo_MILP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
+# 		В этом случае мы будем минимизировать её линейные аппроксимации.
+# 		"""
+# 		self.__if_objective_defined = if_objective_defined
+# 		if not self.__if_objective_defined:
+# 			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+# 			self.__mu = self.__model_gekko.Var(value=-1e-9, name="mu")
+# 			self.__model_gekko.Obj(self.__mu)
+#
+# 	# возвращаем модель
+# 	def get_mip_model(self):
+# 		return self.__model_gekko
+#
+# 	# возвращаем число аппроксимаций функции цели
+# 	def get_object_cuts_num(self):
+# 		return len(self.__obj_cons)
+#
+# 	# возвращаем число аппроксимаций нелинейных ограничений
+# 	def get_non_lin_constr_cuts_num(self):
+# 		return len(self.__obj_cons)
+#
+# 	# удаляем временные ограничения
+# 	def del_temp_constr(self):
+# 		return False
+#
+# 	# задана ли функция цели в pyomo
+# 	def if_objective_defined(self):
+# 		return self.__if_objective_defined
+#
+# 	# значение целевой функции
+# 	def get_objective_value(self):
+# 		return self.__model_gekko.options.objfcnval
+#
+# 	# значения переменных решения
+# 	def get_values(self, xvars):
+# 		return [v.value[0] for v in xvars]
+#
+# 	# очищаем аппроксимационные ограничения
+# 	def clear(self):
+# 		self.__non_lin_cons.clear()
+# 		self.__obj_cons.clear()
+# 		self.__custom_cons.clear()
+#
+# 	# добавляем линеаризованные ограничения на функцию цели
+# 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
+# 		expr = fx - \
+# 			xgradf + \
+# 			sum(xvars[i] * gradf[i] for i in range(len(xvars))) <= self.__mu
+# 		new_constr = self.__model_gekko.Equation(expr)
+# 		self.__obj_cons.append(new_constr)
+#
+# 	# добавляем лианеризованные ограничения на нарушенные ограничения
+# 	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
+# 		expr = gx_violated[k] - \
+# 			xgradg_violated[k] + \
+# 			sum(xvars[i] * gradg_violated[k][i] for i in range(len(xvars))) <= 0
+# 		new_constr = self.__model_gekko.Equation(expr)
+# 		self.__non_lin_cons.append(new_constr)
+#
+# 	# добавляем пользовательские ограничения
+# 	def add_custom_constr(self, expr):
+# 		new_constr = self.__model_gekko.Equation(expr)
+# 		self.__custom_cons.append(new_constr)
+#
+# 	def solve(self):
+# 		results = self.__model_gekko.solve(disp=False, debug=0)
+# 		if self.__model_gekko.options.SOLVESTATUS != 1:
+# 			return False
+# 		return True
 
 ####################################################################################################
 # Класс-оркестратор решения
@@ -436,12 +468,24 @@ class mmaxgon_MINLP_POA:
 		add_constr="ALL",               # {"ALL", "ONE"} число нарушенных нелинейных ограничений для которых добавляются линейные ограничения
 		NLP_refiner_class=None, 		# Класс с моделью NLP со всеми нелинейными ограничениями и с функцией цели для уточнения значений непрерывных переменных при фиксации целочисленных
 		NLP_projector_object=None,		# Объект класса с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область для последующей построении касательной и линейного ограничения
-		lower_bound=None                # Первичная оченка нижней границы решения
+		lower_bound=None,               # Первичная оченка нижней границы решения
+		custom_constraints_list=[]      # Список выражений для дополнительных (не заданных в модели) ограничений для данного решения
 	):
 		# если функция нелинейных ограничений не задана, то ей становится функция-заглушка со значением -1 (т.е. всегда допустимо)
 		if non_lin_constr_fun == None:
 			non_lin_constr_fun = self.__constr_true
 
+		# Очищаем все технические ограничения, которые были добавлены на прошлом прогоне метода
+		MIP_model.clear()
+
+		"""
+		Добавляем пользовательские ограничения к модели. Например, при реализации Branch and Bound или глобального поиска.
+		Применяется если задача невыпуклая, и тогда требуется разбить допустимую область на меньшие фрагменты.
+		"""
+		for expr in custom_constraints_list:
+			MIP_model.add_custom_constr(expr)
+
+		# Инициируем начальные значения
 		x_best = None
 		x_feasible = []
 		goal_best = np.Inf
@@ -449,8 +493,6 @@ class mmaxgon_MINLP_POA:
 		lower_bound = -np.Inf if lower_bound == None else lower_bound
 		if_first_feasible = True
 		iter_num = 0
-
-		MIP_model.clear()
 
 		# Если функция цели определена в MIP_model, то предполагается, что она линейная, и мы её минимизируем.
 		# Если функции цели в MIP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
@@ -485,7 +527,7 @@ class mmaxgon_MINLP_POA:
 			2. Если строится новая касательная к функции цели, то она тоже добавляется в ограничения, что снова уменьшает
 			допустимую область и может только повысить минимум.
 			"""
-			print("MIP_model.get_objective_value(): " + str(MIP_model.get_objective_value()))
+			# print("MIP_model.get_objective_value(): " + str(MIP_model.get_objective_value()))
 			lower_bound = max(lower_bound, MIP_model.get_objective_value())
 
 			# переводим переменные решения в вектор
