@@ -93,9 +93,9 @@ nlp_lower_bound = res_NLP["obj"]
 ####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
 ####################################################################################################
-
+importlib.reload(mg_minlp)
 scipy_refiner_optimizer_obj = mg_minlp.scipy_refiner_optimizer(opt_prob)
-# refine = scipy_refiner_optimizer_obj.get_solution([2,2,2])
+# refine = scipy_refiner_optimizer_obj.get_solution([0.0, 3, 2])
 # print(refine)
 
 ####################################################################################################
@@ -264,82 +264,83 @@ model_cplex_minlp_cp.minimize(-(1000 - model_cplex_minlp_cp.y[0]**2 - 2*model_cp
 ##############################################################################
 # Задача как GEKKO MILP - ПОХОЖЕ НЕ РАБОТАЕТ
 ##############################################################################
-# model_gekko = GEKKO(remote = False) # Initialize gekko
-# model_gekko.options.SOLVER = 1  # APOPT is an MINLP solver
-#
-# model_gekko.solver_options = [
-# 	'minlp_maximum_iterations 500', \
-# 	# minlp iterations with integer solution
-# 	'minlp_max_iter_with_int_sol 10', \
-# 	# treat minlp as nlp
-# 	'minlp_as_nlp 0', \
-# 	# nlp sub-problem max iterations
-# 	'nlp_maximum_iterations 50', \
-# 	# 1 = depth first, 2 = breadth first
-# 	'minlp_branch_method 2', \
-# 	# maximum deviation from whole number
-# 	'minlp_integer_tol 0.05', \
-# 	# covergence tolerance
-# 	'minlp_gap_tol 0.01'
-# ]
-#
-# # Переменные решения (непрерывные)
-# model_gekko.y = [model_gekko.Var(value=2, lb=0, ub=10, name="y_0")]
-# # Переменные решения (целочисленные)
-# model_gekko.x = [model_gekko.Var(value=2, lb=0, ub=10, integer=True, name="x_{}".format(i)) for i in [1,2]]
-#
-# # Линейные ограничения
-# model_gekko.Equation(8 * model_gekko.y[0] + 14 * model_gekko.x[0] + 7 * model_gekko.x[1] - 56 == 0)
-#
-# # model_gekko.Obj(-1e6)
-# # model_gekko.Equation("y_0 >= 2")
-# # model_gekko.solve(disp=True)
-# # print(model_gekko.y[0].value)
-# # print(model_gekko.x[0].value)
-# # print(model_gekko.x[1].value)
-# # print(model_gekko.options.SOLVESTATUS)
-# # print('Objective: ' + str(model_gekko.options.objfcnval))
+model_gekko = GEKKO(remote = False) # Initialize gekko
+model_gekko.options.SOLVER = 1  # APOPT is an MINLP solver
+model_gekko.options.MAX_ITER = 1000
+
+model_gekko.solver_options = [
+	'minlp_maximum_iterations 500', \
+	# minlp iterations with integer solution
+	'minlp_max_iter_with_int_sol 10', \
+	# treat minlp as nlp
+	'minlp_as_nlp 0', \
+	# nlp sub-problem max iterations
+	'nlp_maximum_iterations 50', \
+	# 1 = depth first, 2 = breadth first
+	'minlp_branch_method 1', \
+	# maximum deviation from whole number
+	'minlp_integer_tol 0.001', \
+	# covergence tolerance
+	'minlp_gap_tol 0.01'
+]
+
+# Переменные решения (непрерывные)
+model_gekko.y = [model_gekko.Var(value=2, lb=0, ub=10, name="y_0")]
+# Переменные решения (целочисленные)
+model_gekko.x = [model_gekko.Var(value=2, lb=0, ub=10, integer=True, name="x_{}".format(i)) for i in [1,2]]
+
+# Линейные ограничения
+model_gekko.Equation(8 * model_gekko.y[0] + 14 * model_gekko.x[0] + 7 * model_gekko.x[1] - 56 == 0)
+
+# model_gekko.Obj(-1e6)
+# model_gekko.Equation("y_0 >= 2")
+# model_gekko.solve(disp=True)
+# print(model_gekko.y[0].value)
+# print(model_gekko.x[0].value)
+# print(model_gekko.x[1].value)
+# print(model_gekko.options.SOLVESTATUS)
+# print('Objective: ' + str(model_gekko.options.objfcnval))
 
 ##############################################################################
 # Задача как GEKKO MINLP - ПОХОЖЕ НЕ РАБОТАЕТ
 ##############################################################################
-# model_gekko_minlp = GEKKO(remote = False) # Initialize gekko
-# model_gekko_minlp.options.SOLVER = 1  # APOPT is an MINLP solver
-# model_gekko_minlp.solver_options = [
-# 	'minlp_maximum_iterations 500', \
-# 	# minlp iterations with integer solution
-# 	'minlp_max_iter_with_int_sol 10', \
-# 	# treat minlp as nlp
-# 	'minlp_as_nlp 0', \
-# 	# nlp sub-problem max iterations
-# 	'nlp_maximum_iterations 50', \
-# 	# 1 = depth first, 2 = breadth first
-# 	'minlp_branch_method 2', \
-# 	# maximum deviation from whole number
-# 	'minlp_integer_tol 0.05', \
-# 	# covergence tolerance
-# 	'minlp_gap_tol 0.01'
-# ]
-#
-# # Переменные решения (непрерывные)
-# model_gekko_minlp.y = [model_gekko_minlp.Var(value=2, lb=0, ub=10, name="y_0")]
-# # Переменные решения (целочисленные)
-# model_gekko_minlp.x = [model_gekko_minlp.Var(value=2, lb=0, ub=10, integer=True, name="x_{}".format(i)) for i in [1,2]]
-#
-# # Линейные ограничения
-# model_gekko_minlp.Equation(8 * model_gekko_minlp.y[0] + 14 * model_gekko_minlp.x[0] + 7 * model_gekko_minlp.x[1] - 56 == 0)
-# # нелинейные ограничения
-# model_gekko_minlp.nlc1 = model_gekko_minlp.Equation(model_gekko_minlp.y[0]**2 + model_gekko_minlp.x[0]**2 + model_gekko_minlp.x[1]**2 <= 25)
-# model_gekko_minlp.nlc2 = model_gekko_minlp.Equation(model_gekko_minlp.x[0]**2 + model_gekko_minlp.x[1]**2 <= 12)
-# # нелинейная цель
-# model_gekko_minlp.Obj(-(1000 - model_gekko_minlp.y[0]**2 - 2*model_gekko_minlp.x[0]**2 - model_gekko_minlp.x[1]**2 - model_gekko_minlp.y[0]*model_gekko_minlp.x[0] - model_gekko_minlp.y[0]*model_gekko_minlp.x[1]))
-#
-# # model_gekko_minlp.solve(disp=True)
-# # print(model_gekko_minlp.y[0].value)
-# # print(model_gekko_minlp.x[0].value)
-# # print(model_gekko_minlp.x[1].value)
-# # print(model_gekko_minlp.options.SOLVESTATUS)
-# # print('Objective: ' + str(model_gekko_minlp.options.objfcnval))
+model_gekko_minlp = GEKKO(remote = False) # Initialize gekko
+model_gekko_minlp.options.SOLVER = 1  # APOPT is an MINLP solver
+model_gekko_minlp.solver_options = [
+	'minlp_maximum_iterations 500', \
+	# minlp iterations with integer solution
+	'minlp_max_iter_with_int_sol 10', \
+	# treat minlp as nlp
+	'minlp_as_nlp 0', \
+	# nlp sub-problem max iterations
+	'nlp_maximum_iterations 50', \
+	# 1 = depth first, 2 = breadth first
+	'minlp_branch_method 2', \
+	# maximum deviation from whole number
+	'minlp_integer_tol 0.05', \
+	# covergence tolerance
+	'minlp_gap_tol 0.01'
+]
+
+# Переменные решения (непрерывные)
+model_gekko_minlp.y = [model_gekko_minlp.Var(value=2, lb=0, ub=10, name="y_0")]
+# Переменные решения (целочисленные)
+model_gekko_minlp.x = [model_gekko_minlp.Var(value=2, lb=0, ub=10, integer=True, name="x_{}".format(i)) for i in [1,2]]
+
+# Линейные ограничения
+model_gekko_minlp.Equation(8 * model_gekko_minlp.y[0] + 14 * model_gekko_minlp.x[0] + 7 * model_gekko_minlp.x[1] - 56 == 0)
+# нелинейные ограничения
+model_gekko_minlp.nlc1 = model_gekko_minlp.Equation(model_gekko_minlp.y[0]**2 + model_gekko_minlp.x[0]**2 + model_gekko_minlp.x[1]**2 <= 25)
+model_gekko_minlp.nlc2 = model_gekko_minlp.Equation(model_gekko_minlp.x[0]**2 + model_gekko_minlp.x[1]**2 <= 12)
+# нелинейная цель
+model_gekko_minlp.Obj(-(1000 - model_gekko_minlp.y[0]**2 - 2*model_gekko_minlp.x[0]**2 - model_gekko_minlp.x[1]**2 - model_gekko_minlp.y[0]*model_gekko_minlp.x[0] - model_gekko_minlp.y[0]*model_gekko_minlp.x[1]))
+
+# model_gekko_minlp.solve(disp=True)
+# print(model_gekko_minlp.y[0].value)
+# print(model_gekko_minlp.x[0].value)
+# print(model_gekko_minlp.x[1].value)
+# print(model_gekko_minlp.options.SOLVESTATUS)
+# print('Objective: ' + str(model_gekko_minlp.options.objfcnval))
 
 ###############################################################################
 # Функция, переводящая переменные решения pyomo в вектор
@@ -372,46 +373,46 @@ poa = mg_minlp.mmaxgon_MINLP_POA(
 ###############################################################################
 # GEKKO Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
-# gekko_mip_model_wrapper = mg_minlp.gekko_MIP_model_wrapper(
-# 	model_gekko=model_gekko,
-# 	if_objective_defined=False
-# )
-#
-# start_time = time()
-# res = poa.solve(
-# 	MIP_model=gekko_mip_model_wrapper,
-# 	non_lin_obj_fun=obj,
-# 	non_lin_constr_fun=non_lin_cons,
-# 	decision_vars_to_vector_fun=DV_2_vec_gekko,
-# 	tolerance=1e-1,
-# 	add_constr="ALL",
-# 	NLP_refiner_class=scipy_refiner_optimizer,
-# 	NLP_projector_object=scipy_projector_optimizer_obj,
-# 	lower_bound=nlp_lower_bound,
-# 	custom_constraints_list=["y_0 >= 2"]
-# )
-# print(time() - start_time)
-# print(res)
-#
-# gekko_mip_model_wrapper = mg_minlp.gekko_MIP_model_wrapper(
-# 	model_gekko=model_gekko_minlp,
-# 	if_objective_defined=True
-# )
-#
-# start_time = time()
-# res = poa.solve(
-# 	MIP_model=gekko_mip_model_wrapper,
-# 	non_lin_obj_fun=None,
-# 	non_lin_constr_fun=None,
-# 	decision_vars_to_vector_fun=DV_2_vec_gekko,
-# 	tolerance=1e-1,
-# 	add_constr="ALL",
-# 	NLP_refiner_class=None, #scipy_refiner_optimizer,
-# 	NLP_projector_object=None #scipy_projector_optimizer_obj
-# 	,custom_constraints_list=["y_0 >= 2"]
-# )
-# print(time() - start_time)
-# print(res)
+gekko_mip_model_wrapper = mg_minlp.gekko_MIP_model_wrapper(
+	model_gekko=model_gekko,
+	if_objective_defined=False
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=gekko_mip_model_wrapper,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	# NLP_refiner_object=scipy_refiner_optimizer_obj,
+	# NLP_projector_object=scipy_projector_optimizer_obj,
+	lower_bound=nlp_lower_bound,
+	custom_constraints_list=["y_0 >= 2"]
+)
+print(time() - start_time)
+print(res)
+
+gekko_mip_model_wrapper = mg_minlp.gekko_MIP_model_wrapper(
+	model_gekko=model_gekko_minlp,
+	if_objective_defined=True
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=gekko_mip_model_wrapper,
+	non_lin_obj_fun=None,
+	non_lin_constr_fun=None,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_refiner_object=None, #scipy_refiner_optimizer_obj,
+	NLP_projector_object=None #scipy_projector_optimizer_obj
+	,custom_constraints_list=["y_0 >= 2"]
+)
+print(time() - start_time)
+print(res)
 
 ###############################################################################
 # CPLEX MP Нелинейная функция цели, есть нелинейные ограничения
