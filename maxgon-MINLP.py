@@ -95,7 +95,7 @@ nlp_lower_bound = res_NLP["obj"]
 ####################################################################################################
 importlib.reload(mg_minlp)
 scipy_refiner_optimizer_obj = mg_minlp.scipy_refiner_optimizer(opt_prob)
-# refine = scipy_refiner_optimizer_obj.get_solution([0.0, 3, 2])
+# refine = scipy_refiner_optimizer_obj.get_solution([1.75, 1.9999999980529146, 2.0000000038941708])
 # print(refine)
 
 ####################################################################################################
@@ -607,7 +607,7 @@ res1 = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_object=None, #scipy_refiner_optimizer,
+	NLP_refiner_object=scipy_refiner_optimizer_obj,
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[pyomo_mip_model_wrapper.get_mip_model().y[0]>=1]

@@ -70,8 +70,8 @@ class scipy_refiner_optimizer:
 		# фиксируем целочисленные переменные
 		lb = np.array(self.__opt_prob.dvars.bounds.lb)
 		ub = np.array(self.__opt_prob.dvars.bounds.ub)
-		lb[self.__opt_prob.dvars.ix_int] = np.array(x0)[self.__opt_prob.dvars.ix_int]
-		ub[self.__opt_prob.dvars.ix_int] = np.array(x0)[self.__opt_prob.dvars.ix_int]
+		lb[self.__opt_prob.dvars.ix_int] = np.round(np.array(x0)[self.__opt_prob.dvars.ix_int])
+		ub[self.__opt_prob.dvars.ix_int] = np.round(np.array(x0)[self.__opt_prob.dvars.ix_int])
 		res = opt.minimize(
 			fun=self.__opt_prob.objective.fun,
 			bounds=opt.Bounds(lb, ub),
