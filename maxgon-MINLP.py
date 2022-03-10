@@ -598,6 +598,7 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	mip_solver_name="cbc",
 	mip_solver_options={"allowableGap": 1e-1, "integerTolerance": 1e-1, "seconds": 1e-1}
 )
+model = pyomo_mip_model_wrapper.get_mip_model()
 
 start_time = time()
 res1 = poa.solve(
@@ -607,10 +608,10 @@ res1 = poa.solve(
 	decision_vars_to_vector_fun=DV_2_vec,
 	tolerance=1e-1,
 	add_constr="ONE",
-	NLP_refiner_object=scipy_refiner_optimizer_obj,
-	NLP_projector_object=scipy_projector_optimizer_obj,
+	# NLP_refiner_object=scipy_refiner_optimizer_obj,
+	# NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
-	,custom_constraints_list=[pyomo_mip_model_wrapper.get_mip_model().y[0]>=1]
+	,custom_constraints_list=[model.y[0] >= 1]
 )
 print(time() - start_time)
 print(res1)
