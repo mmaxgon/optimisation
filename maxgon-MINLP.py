@@ -37,7 +37,7 @@ c3: x[2]^2 + x[3]^2 <= 12;
 # Абстрактное описание задачи
 ####################################################################################################
 # Начальное значение
-x0 = [2]*3
+x0 = [1.75, 3, 0]
 # Переменные решения
 decision_vars = mg_minlp.dvars(3, [1, 2], [0], mg_minlp.bounds([0, 0, 0], [10, 10, 10]), x0)
 
@@ -144,8 +144,8 @@ model_milp.lin_cons = pyomo.Constraint(expr=
 ##############################################################################
 model_minlp = pyomo.ConcreteModel()
 # переменные решения
-model_minlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize=2)
-model_minlp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize=1.0)
+model_minlp.x = pyomo.Var([1, 2], domain = pyomo.NonNegativeIntegers, bounds = (0, 10), initialize=lambda model, i: [3, 0][i-1])
+model_minlp.y = pyomo.Var([0], domain = pyomo.NonNegativeReals, bounds = (0, 10), initialize=1.75)
 # Линейные ограничения
 model_minlp.lin_cons = pyomo.Constraint(expr = 8 * model_minlp.y[0] + 14 * model_minlp.x[1] + 7 * model_minlp.x[2] - 56 == 0)
 # нелинейные ограничения
@@ -271,7 +271,7 @@ model_gekko.options.MAX_ITER = 1000
 model_gekko.solver_options = [
 	'minlp_maximum_iterations 500', \
 	# minlp iterations with integer solution
-	'minlp_max_iter_with_int_sol 10', \
+	'minlp_max_iter_with_int_sol 100', \
 	# treat minlp as nlp
 	'minlp_as_nlp 0', \
 	# nlp sub-problem max iterations
@@ -281,7 +281,7 @@ model_gekko.solver_options = [
 	# maximum deviation from whole number
 	'minlp_integer_tol 0.001', \
 	# covergence tolerance
-	'minlp_gap_tol 0.01'
+	'minlp_gap_tol 0.001'
 ]
 
 # Переменные решения (непрерывные)
@@ -388,8 +388,8 @@ res = poa.solve(
 	add_constr="ALL",
 	# NLP_refiner_object=scipy_refiner_optimizer_obj,
 	# NLP_projector_object=scipy_projector_optimizer_obj,
-	lower_bound=nlp_lower_bound,
-	custom_constraints_list=["y_0 >= 2"]
+	lower_bound=nlp_lower_bound
+	,custom_constraints_list=[gekko_mip_model_wrapper.get_mip_model().y[0] >= 1]
 )
 print(time() - start_time)
 print(res)

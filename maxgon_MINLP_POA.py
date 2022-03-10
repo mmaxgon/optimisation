@@ -300,7 +300,7 @@ class ortools_cp_sat_MIP_model_wrapper:
 
 	# возвращаем число аппроксимаций нелинейных ограничений
 	def get_non_lin_constr_cuts_num(self):
-		return len(self.__obj_cons)
+		return len(self.__non_lin_cons)
 
 	# удаляем временные ограничения
 	def del_temp_constr(self):
@@ -320,9 +320,10 @@ class ortools_cp_sat_MIP_model_wrapper:
 
 	# очищаем аппроксимационные ограничения
 	def clear(self):
-		self.__non_lin_cons.clear()
-		self.__obj_cons.clear()
-		self.__custom_cons.clear()
+		# self.__non_lin_cons.clear()
+		# self.__obj_cons.clear()
+		# self.__custom_cons.clear()
+		return False
 
 	# добавляем линеаризованные ограничения на функцию цели
 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
@@ -399,7 +400,7 @@ class cplex_MIP_model_wrapper:
 
 	# возвращаем число аппроксимаций нелинейных ограничений
 	def get_non_lin_constr_cuts_num(self):
-		return len(self.__obj_cons)
+		return len(self.__non_lin_cons)
 
 	# удаляем временные ограничения
 	def del_temp_constr(self):
@@ -504,11 +505,13 @@ class gekko_MIP_model_wrapper:
 
 	# возвращаем число аппроксимаций функции цели
 	def get_object_cuts_num(self):
+		# print([str(c) for c in self.__obj_cons])
 		return len(self.__obj_cons)
 
 	# возвращаем число аппроксимаций нелинейных ограничений
 	def get_non_lin_constr_cuts_num(self):
-		return len(self.__obj_cons)
+		# print([str(c) for c in self.__non_lin_cons])
+		return len(self.__non_lin_cons)
 
 	# удаляем временные ограничения
 	def del_temp_constr(self):
@@ -530,9 +533,10 @@ class gekko_MIP_model_wrapper:
 
 	# очищаем аппроксимационные ограничения
 	def clear(self):
-		self.__non_lin_cons.clear()
-		self.__obj_cons.clear()
-		self.__custom_cons.clear()
+		# self.__non_lin_cons.clear()
+		# self.__obj_cons.clear()
+		# self.__custom_cons.clear()
+		return False
 
 	# добавляем линеаризованные ограничения на функцию цели
 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
@@ -556,7 +560,7 @@ class gekko_MIP_model_wrapper:
 		self.__custom_cons.append(new_constr)
 
 	def solve(self):
-		results = self.__model_gekko.solve(disp=True)
+		results = self.__model_gekko.solve(disp=False)
 		if self.__model_gekko.options.SOLVESTATUS != 1:
 			return False
 		return True
