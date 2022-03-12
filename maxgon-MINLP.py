@@ -846,11 +846,6 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 )
 model = pyomo_mip_model_wrapper.get_mip_model()
 
-settings = rbfopt.RbfoptSettings(
-	minlp_solver_path='C:\\Program Files\\solvers\\Bonmin',
-	nlp_solver_path='C:\\Program Files\\solvers\\IPOPT\\bin'
-)
-
 solution = {}
 def obj_funct(t):
 	res = poa.solve(
@@ -869,6 +864,16 @@ def obj_funct(t):
 	solution[t[0]] = res
 	return res["obj"]
 
+# rbfopt
+settings = rbfopt.RbfoptSettings(
+	max_iterations=1000,
+	max_evaluations=5,
+	algorithm="MSRSM", #Gutmann
+	global_search_method="solver", #genetic sampling solver
+	minlp_solver_path='C:/Program Files/solvers/Bonmin/bonmin.exe', # если global_search_method="solver"
+	nlp_solver_path='C:/Program Files/solvers/IPOPT/bin/ipopt.exe'  # если global_search_method="solver"
+)
+
 bb = rbfopt.RbfoptUserBlackBox(
 	dimension = 1,
 	var_lower = np.array([0]),
@@ -877,10 +882,11 @@ bb = rbfopt.RbfoptUserBlackBox(
 	obj_funct = obj_funct,
 	obj_funct_noisy = None
 )
-settings = rbfopt.RbfoptSettings(max_evaluations=50)
 alg = rbfopt.RbfoptAlgorithm(settings, bb)
+
+solution = {}
 val, x, itercount, evalcount, fast_evalcount = alg.optimize()
 
 print(solution[x[0]])
-solution.keys()
+print(solution.keys())
 
