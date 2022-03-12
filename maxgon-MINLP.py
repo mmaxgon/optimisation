@@ -16,6 +16,7 @@ import ortools.sat.python.cp_model as ortools_cp_model
 import docplex.mp.model as docplex_mp_model
 import docplex.cp.model as docplex_cp_model
 from gekko import GEKKO
+import rbfopt
 ###############################################################################
 '''
 var x{j in 1..3} >= 0;
@@ -93,9 +94,8 @@ nlp_lower_bound = res_NLP["obj"]
 ####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
 ####################################################################################################
-importlib.reload(mg_minlp)
 scipy_refiner_optimizer_obj = mg_minlp.scipy_refiner_optimizer(opt_prob)
-# refine = scipy_refiner_optimizer_obj.get_solution([1.75, 1.9999999980529146, 2.0000000038941708])
+# refine = scipy_refiner_optimizer_obj.get_solution([0.3, 1.9999999980529146, 2.0000000038941708])
 # print(refine)
 
 ####################################################################################################
@@ -831,4 +831,56 @@ print(res9)
 print(res1)
 
 model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
+
+###############################################################################
+# GLOBAL OPTIMIZATION
+###############################################################################
+poa = mg_minlp.mmaxgon_MINLP_POA(
+	eps=1e-6
+)
+pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
+	pyomo=pyomo,
+	pyomo_MIP_model=model_milp,
+	mip_solver_name="cbc",
+	mip_solver_options={"allowableGap": 1e-1, "integerTolerance": 1e-1, "seconds": 1e-1}
+)
+model = pyomo_mip_model_wrapper.get_mip_model()
+
+settings = rbfopt.RbfoptSettings(
+	minlp_solver_path='C:\\Program Files\\solvers\\Bonmin',
+	nlp_solver_path='C:\\Program Files\\solvers\\IPOPT\\bin'
+)
+
+solution = {}
+def obj_funct(t):
+	res = poa.solve(
+		MIP_model=pyomo_mip_model_wrapper,
+		non_lin_obj_fun=opt_prob.objective.fun,
+		non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
+		decision_vars_to_vector_fun=DV_2_vec,
+		tolerance=1e-1,
+		add_constr="ONE",
+		# NLP_refiner_object=scipy_refiner_optimizer_obj,
+		NLP_projector_object=scipy_projector_optimizer_obj,
+		lower_bound=nlp_lower_bound
+		, custom_constraints_list=[model.y[0] >= t[0], model.y[0] <= t[0] + 1 - 1e-6]
+	)
+	global solution
+	solution[t[0]] = res
+	return res["obj"]
+
+bb = rbfopt.RbfoptUserBlackBox(
+	dimension = 1,
+	var_lower = np.array([0]),
+	var_upper = np.array([9]),
+	var_type = np.array(['I']),
+	obj_funct = obj_funct,
+	obj_funct_noisy = None
+)
+settings = rbfopt.RbfoptSettings(max_evaluations=50)
+alg = rbfopt.RbfoptAlgorithm(settings, bb)
+val, x, itercount, evalcount, fast_evalcount = alg.optimize()
+
+print(solution[x[0]])
+solution.keys()
 
