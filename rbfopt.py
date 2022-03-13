@@ -1,8 +1,12 @@
 import numpy as np
 import rbfopt
 settings = rbfopt.RbfoptSettings(
-	minlp_solver_path='C:/Program Files/bonmin/bin', 
-	nlp_solver_path='C:/Program Files/ipopt/bin'
+	max_iterations=1000,
+	max_evaluations=50,
+	algorithm="MSRSM", # MSRSM Gutmann
+	global_search_method="solver", # genetic sampling solver
+	minlp_solver_path='C:/Program Files/solvers/Bonmin/bonmin.exe', # если global_search_method="solver"
+	nlp_solver_path='C:/Program Files/solvers/IPOPT/bin/ipopt.exe'  # если global_search_method="solver"
 )
 
 def obj_funct(x):
@@ -16,6 +20,5 @@ bb = rbfopt.RbfoptUserBlackBox(
 	obj_funct = obj_funct,
 	obj_funct_noisy = None
 )
-settings = rbfopt.RbfoptSettings(max_evaluations=50)
 alg = rbfopt.RbfoptAlgorithm(settings, bb)
 val, x, itercount, evalcount, fast_evalcount = alg.optimize()
