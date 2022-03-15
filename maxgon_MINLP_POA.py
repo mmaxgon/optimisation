@@ -31,22 +31,36 @@ optimization_problem = namedtuple("optimization_problem", ["dvars", "objective",
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
-def get_NLP_lower_bound(opt_prob):
+def get_NLP_lower_bound(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
+	constraints = [
+		opt.LinearConstraint(
+			opt_prob.linear_constraints.A,
+			opt_prob.linear_constraints.bounds.lb,
+			opt_prob.linear_constraints.bounds.ub
+		),
+		opt.NonlinearConstraint(
+			opt_prob.nonlinear_constraints.fun,
+			opt_prob.nonlinear_constraints.bounds.lb,
+			opt_prob.nonlinear_constraints.bounds.ub
+		)
+	]
+	if custom_linear_constraints != None:
+		constraints.append(
+			opt.LinearConstraint(
+			custom_linear_constraints.A,
+			custom_linear_constraints.bounds.lb,
+			custom_linear_constraints.bounds.ub
+		))
+	if custom_nonlinear_constraints != None:
+		constraints.append(opt.NonlinearConstraint(
+			custom_nonlinear_constraints.fun,
+			custom_nonlinear_constraints.bounds.lb,
+			custom_nonlinear_constraints.bounds.ub
+		))
 	res = opt.minimize(
 		fun=opt_prob.objective.fun,
 		bounds=opt.Bounds(opt_prob.dvars.bounds.lb, opt_prob.dvars.bounds.ub),
-		constraints=[
-			opt.LinearConstraint(
-				opt_prob.linear_constraints.A,
-				opt_prob.linear_constraints.bounds.lb,
-				opt_prob.linear_constraints.bounds.ub
-			),
-			opt.NonlinearConstraint(
-				opt_prob.nonlinear_constraints.fun,
-				opt_prob.nonlinear_constraints.bounds.lb,
-				opt_prob.nonlinear_constraints.bounds.ub
-			)
-		],
+		constraints=constraints,
 		x0=opt_prob.dvars.x0,
 		method="trust-constr",
 		options={'verbose': 0, "maxiter": 200}

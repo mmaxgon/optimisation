@@ -91,6 +91,7 @@ res_NLP = mg_minlp.get_NLP_lower_bound(opt_prob)
 print(res_NLP)
 nlp_lower_bound = res_NLP["obj"]
 
+# mg_minlp.get_NLP_lower_bound(opt_prob, custom_linear_constraints=mg_minlp.linear_constraints(1, [[1,0,0]], mg_minlp.bounds([3], [4])))
 ####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
 ####################################################################################################
@@ -848,6 +849,25 @@ model = pyomo_mip_model_wrapper.get_mip_model()
 
 solution = {}
 def obj_funct(t):
+	# Сначала получаем нижнюю границу решения
+	res_nlp = mg_minlp.get_NLP_lower_bound(
+		opt_prob,
+		custom_linear_constraints=mg_minlp.linear_constraints(1, [[1, 0, 0]], mg_minlp.bounds([t[0]], [t[0] + 1 - 1e-6]))
+	)
+	if res_nlp["success"] and res_nlp["constr_violation"] < 1e-6:
+		lower_bound = res_nlp["obj"]
+	else:
+		# не найдено допустимое решение NLP => не будет допустимого решения MINLP
+		solution[t[0]] = {"obj": np.Inf, "x": res_nlp["x"]}
+		return np.Inf
+	
+	# Если нижняя граница NLP больше существующего лучшего решения - не ищем решение MINLP
+	if len(solution) > 0:
+		best_solution = min([solution[s]["obj"] for s in solution])
+		if lower_bound >= best_solution:
+			solution[t[0]] = {"obj": lower_bound, "x": res_nlp["x"]}
+			return lower_bound
+	
 	res = poa.solve(
 		MIP_model=pyomo_mip_model_wrapper,
 		non_lin_obj_fun=opt_prob.objective.fun,
@@ -857,23 +877,21 @@ def obj_funct(t):
 		add_constr="ONE",
 		# NLP_refiner_object=scipy_refiner_optimizer_obj,
 		NLP_projector_object=scipy_projector_optimizer_obj,
-		lower_bound=nlp_lower_bound
-		, custom_constraints_list=[model.y[0] >= t[0], model.y[0] <= t[0] + 1 - 1e-6]
+		lower_bound=lower_bound,
+		custom_constraints_list=[model.y[0] >= t[0], model.y[0] <= t[0] + 1 - 1e-6]
 	)
-	global solution
 	solution[t[0]] = res
 	return res["obj"]
 
 # rbfopt
 settings = rbfopt.RbfoptSettings(
-	max_iterations=1000,
+	max_iterations=5,
 	max_evaluations=5,
 	algorithm="MSRSM", #Gutmann
-	global_search_method="solver", #genetic sampling solver
+	global_search_method="genetic", #genetic sampling solver
 	minlp_solver_path='C:/Program Files/solvers/Bonmin/bonmin.exe', # если global_search_method="solver"
 	nlp_solver_path='C:/Program Files/solvers/IPOPT/bin/ipopt.exe'  # если global_search_method="solver"
 )
-
 bb = rbfopt.RbfoptUserBlackBox(
 	dimension = 1,
 	var_lower = np.array([0]),
