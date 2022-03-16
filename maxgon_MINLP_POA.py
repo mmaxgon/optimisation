@@ -630,24 +630,24 @@ class mmaxgon_MINLP_POA:
 
 		# Инициируем начальные значения
 		x_best = None
-		x_feasible = []
 		goal_best = np.Inf
 		upper_bound = np.Inf
 		lower_bound = -np.Inf if lower_bound == None else lower_bound
-		if_first_feasible = True
+		if_first_run = True # признак первого прогона
 		iter_num = 0
 
 		# Если функция цели определена в MIP_model, то предполагается, что она линейная, и мы её минимизируем.
 		# Если функции цели в MIP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
 		# В этом случае мы будем минимизировать её линейные аппроксимации, и для этого нам понадобится вспомогательная
 		# переменная решений mu
-		if not MIP_model.if_objective_defined() and non_lin_obj_fun == None:
+		if (not MIP_model.if_objective_defined()) and non_lin_obj_fun == None:
 			raise ValueError("Не определена функция цели!")
 		if MIP_model.if_objective_defined() and non_lin_obj_fun != None:
 			raise ValueError("Одновременно определены две функции цели!")
 
 		while True:
 			iter_num += 1
+			
 			# Решаем MIP-задачу
 			results = MIP_model.solve()
 
@@ -670,8 +670,14 @@ class mmaxgon_MINLP_POA:
 			2. Если строится новая касательная к функции цели, то она тоже добавляется в ограничения, что снова уменьшает
 			допустимую область и может только повысить минимум.
 			"""
-			print("MIP_model.get_objective_value(): " + str(MIP_model.get_objective_value()))
-			lower_bound = max(lower_bound, MIP_model.get_objective_value())
+			# значение цели вспомогательной задачи
+			obj = MIP_model.get_objective_value()
+			print("MIP_model.get_objective_value(): " + str(obj))
+			
+			# lower_bound может только увеличиваться, если нет - ошибка (может быть нарушение выпуклости задачи)
+			# if obj < lower_bound:
+			# 	raise ValueError("Нижняя граница не может уменьшаться!")
+			lower_bound = max(lower_bound, obj)
 
 			# переводим переменные решения в вектор
 			xvars = decision_vars_to_vector_fun(MIP_model.get_mip_model())
@@ -686,19 +692,21 @@ class mmaxgon_MINLP_POA:
 					print("После уточнения:\r\n")
 					print(x)
 
-			# если это первое решение - убираем ограничение на целевую переменную mu
-			if if_first_feasible and non_lin_obj_fun != None:
-				MIP_model.del_temp_constr()
-				if_first_feasible = False
+			# если это первое решение и функция цели не задана в задаче - убираем ограничение на целевую переменную mu
+				if if_first_run and (not MIP_model.if_objective_defined()):
+					MIP_model.del_temp_constr()
+					if_first_run = False
 
 			# Если функция цели нелинейная, то добавляем новую аппроксимацию функции цели в ограничения
-			if non_lin_obj_fun != None:
+			if not MIP_model.if_objective_defined():
+				# fx - значение исходной целевой функции
 				fx = non_lin_obj_fun(x)
 				gradf = self.__get_linear_appr(non_lin_obj_fun, x)
 				xgradf = np.dot(x, gradf)
 				MIP_model.add_obj_constr(fx, gradf, xgradf, xvars)
 			else:
-				fx = MIP_model.get_objective_value()
+				# fx - целевая функция, заданная в вспомогательной задаче
+				fx = obj
 
 			# получаем индексы для нарушенных нелинейных ограничений
 			gx = non_lin_constr_fun(x)
@@ -707,37 +715,18 @@ class mmaxgon_MINLP_POA:
 			# если решение допустимо
 			if len(ix_violated) == 0:
 				print("Feasible")
-				# проверяем было ли уже данное решение, если да, то оно - оптимальное решение
-				for y in x_feasible:
-					if np.allclose(x, y):
-						print("All close!")
-						return {
-							"x": x_best,
-							"obj": goal_best,
-							"non_lin_constr_num": MIP_model.get_non_lin_constr_cuts_num(),
-							"goal_fun_constr_num": MIP_model.get_object_cuts_num(),
-							"iter_num": iter_num,
-							"upper_bound": upper_bound,
-							"lower_bound": lower_bound
-						}
-
-				# если функция цели такая же как у лучшего решения - сохраняем это решение
-				if np.isclose(fx, goal_best):
-					x_feasible.append(x)
+				
 				# обновляем лучшее решение
 				if fx < goal_best:
 					x_best = copy.copy(x)
 					goal_best = fx
 					# верхняя граница - пока самое лучшее решение
 					upper_bound = goal_best
-					print(x_best, goal_best)
-					# если найдено лучшее решение, то все прошлые лучшие рещения удаляются и добавляется новое
-					x_feasible.clear()
-					x_feasible.append(x_best)
+					print("Лучшее решение: {0}, {1}".format(x_best, goal_best))
 
 				# сравниваем нижние и верхние границы функции цели
-				print(lower_bound, upper_bound)
-				if upper_bound < lower_bound:
+				print("Нижняя и верхняя граница: {0}, {1}".format(lower_bound, upper_bound))
+				if upper_bound + self.__eps < lower_bound:
 					raise ValueError("upper_bound < lower_bound!")
 				if (upper_bound - lower_bound <= tolerance):
 					return {

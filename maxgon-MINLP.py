@@ -410,7 +410,7 @@ res = poa.solve(
 	add_constr="ALL",
 	NLP_refiner_object=None, #scipy_refiner_optimizer_obj,
 	NLP_projector_object=None #scipy_projector_optimizer_obj
-	,custom_constraints_list=["y_0 >= 2"]
+	#,custom_constraints_list=["y_0 >= 2"]
 )
 print(time() - start_time)
 print(res)
@@ -831,7 +831,7 @@ print(time() - start_time)
 print(res9)
 print(res1)
 
-model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
+model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*model_minlp.x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
 
 ###############################################################################
 # GLOBAL OPTIMIZATION
@@ -888,7 +888,7 @@ settings = rbfopt.RbfoptSettings(
 	max_iterations=5,
 	max_evaluations=5,
 	algorithm="MSRSM", #Gutmann
-	global_search_method="genetic", #genetic sampling solver
+	global_search_method="solver", #genetic sampling solver
 	minlp_solver_path='C:/Program Files/solvers/Bonmin/bonmin.exe', # если global_search_method="solver"
 	nlp_solver_path='C:/Program Files/solvers/IPOPT/bin/ipopt.exe'  # если global_search_method="solver"
 )
