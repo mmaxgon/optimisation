@@ -633,6 +633,7 @@ class mmaxgon_MINLP_POA:
 		goal_best = np.Inf
 		upper_bound = np.Inf
 		lower_bound = -np.Inf if lower_bound == None else lower_bound
+		prev_obj = -np.Inf
 		if_first_run = True # признак первого прогона
 		iter_num = 0
 
@@ -674,9 +675,10 @@ class mmaxgon_MINLP_POA:
 			obj = MIP_model.get_objective_value()
 			print("MIP_model.get_objective_value(): " + str(obj))
 			
-			# lower_bound может только увеличиваться, если нет - ошибка (может быть нарушение выпуклости задачи)
-			# if obj < lower_bound:
-			# 	raise ValueError("Нижняя граница не может уменьшаться!")
+			# obj (целевая функция вспомогательной задачи) может только увеличиваться, если нет - ошибка (может быть нарушение выпуклости задачи)
+			if obj < prev_obj:
+				raise ValueError("Значение целевой функции вспомогательной задачи не может уменьшаться!")
+			prev_obj = obj
 			lower_bound = max(lower_bound, obj)
 
 			# переводим переменные решения в вектор

@@ -746,7 +746,7 @@ print(res5)
 ###########################
 # Есть нелинейные ограничения, функция цели - линейная
 ###########################
-model_milp.obj = pyomo.Objective(expr= model_milp.y[0] + 2*model_milp.x[1] + model_milp.x[2])
+model_milp.obj = pyomo.Objective(expr=model_milp.y[0] + 2*model_milp.x[1] + model_milp.x[2])
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
@@ -832,6 +832,31 @@ print(res9)
 print(res1)
 
 model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*model_minlp.x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
+####################################################################
+model_minlp.del_component(model_minlp.nlc1)
+model_minlp.del_component(model_minlp.nlc2)
+
+pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
+	pyomo=pyomo,
+	pyomo_MIP_model=model_minlp,
+	mip_solver_name="cplex"
+)
+
+start_time = time()
+res10 = poa.solve(
+	MIP_model=pyomo_mip_model_wrapper,
+	non_lin_obj_fun=None,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
+	decision_vars_to_vector_fun=DV_2_vec,
+	tolerance=1e-1,
+	add_constr="ONE"
+)
+print(time() - start_time)
+
+print(res10)
+
+model_minlp.nlc1 = pyomo.Constraint(expr = model_minlp.y[0]**2 + model_minlp.x[1]**2 + model_minlp.x[2]**2 <= 25)
+model_minlp.nlc2 = pyomo.Constraint(expr = model_minlp.x[1]**2 + model_minlp.x[2]**2 <= 12)
 
 ###############################################################################
 # GLOBAL OPTIMIZATION
@@ -849,7 +874,7 @@ model = pyomo_mip_model_wrapper.get_mip_model()
 
 solution = {}
 def obj_funct(t):
-	# Сначала получаем нижнюю границу решения
+	# Сначала получаем нижнюю границу решения как решение NLP
 	res_nlp = mg_minlp.get_NLP_lower_bound(
 		opt_prob,
 		custom_linear_constraints=mg_minlp.linear_constraints(1, [[1, 0, 0]], mg_minlp.bounds([t[0]], [t[0] + 1 - 1e-6]))
@@ -868,6 +893,7 @@ def obj_funct(t):
 			solution[t[0]] = {"obj": lower_bound, "x": res_nlp["x"]}
 			return lower_bound
 	
+	# Решаем MINLP
 	res = poa.solve(
 		MIP_model=pyomo_mip_model_wrapper,
 		non_lin_obj_fun=opt_prob.objective.fun,
