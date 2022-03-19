@@ -69,6 +69,55 @@ def get_NLP_lower_bound(opt_prob, custom_linear_constraints = None, custom_nonli
 	return res
 
 ####################################################################################################
+# Попытка получить допустимое решение
+####################################################################################################
+def get_feasible_solution(opt_prob, x_nlp):
+	constraints = [
+		opt.LinearConstraint(
+			opt_prob.linear_constraints.A,
+			opt_prob.linear_constraints.bounds.lb,
+			opt_prob.linear_constraints.bounds.ub
+		),
+		opt.NonlinearConstraint(
+			opt_prob.nonlinear_constraints.fun,
+			opt_prob.nonlinear_constraints.bounds.lb,
+			opt_prob.nonlinear_constraints.bounds.ub
+		)
+	]
+	init_bounds_lb = np.array(opt_prob.dvars.bounds.lb)
+	init_bounds_ub = np.array(opt_prob.dvars.bounds.ub)
+	ix_int = copy.copy(opt_prob.dvars.ix_int)
+	x_nlp = np.array(x_nlp)
+
+	while True:
+		x_int = x_nlp[ix_int]
+		x_dist_int = np.amin([np.ceil(x_int) - x_int, x_int - np.floor(x_int)], axis=0)
+		ix = np.argmin(x_dist_int)
+		round_val = np.round(x_nlp[ix_int][ix])
+		init_bounds_lb[ix_int[ix]] = round_val
+		init_bounds_ub[ix_int[ix]] = round_val
+
+		res = opt.minimize(
+			fun=opt_prob.objective.fun,
+			bounds=opt.Bounds(init_bounds_lb, init_bounds_ub),
+			constraints=constraints,
+			x0=x_nlp,
+			method="trust-constr",
+			options={'verbose': 0, "maxiter": 200}
+		)
+		if (not res.success) or (res.constr_violation > 1e-6):
+			raise ValueError("Feasible solution not found!")
+
+		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+		print(res)
+		if len(ix_int) <= 1:
+			return res
+		x_nlp = res["x"]
+		ix_int = np.delete(ix_int, ix)
+
+	return res
+
+####################################################################################################
 # Уточнение непрерывных компонент решения при фиксации целочисленных
 ####################################################################################################
 
