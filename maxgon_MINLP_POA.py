@@ -6,7 +6,7 @@ import copy
 import numpy as np
 import scipy.optimize as opt
 
-# import pyomo.environ as pyomo
+import pyomo.environ as pyomo
 # import ortools.sat.python.cp_model as ortools_cp_model
 # import docplex.mp.model as docplex_mp_model
 # from gekko import GEKKO
@@ -31,6 +31,7 @@ optimization_problem = namedtuple("optimization_problem", ["dvars", "objective",
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
+
 def get_NLP_lower_bound(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
 	constraints = [
 		opt.LinearConstraint(
@@ -66,55 +67,6 @@ def get_NLP_lower_bound(opt_prob, custom_linear_constraints = None, custom_nonli
 		options={'verbose': 0, "maxiter": 200}
 	)
 	res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
-	return res
-
-####################################################################################################
-# Попытка получить допустимое решение
-####################################################################################################
-def get_feasible_solution(opt_prob, x_nlp):
-	constraints = [
-		opt.LinearConstraint(
-			opt_prob.linear_constraints.A,
-			opt_prob.linear_constraints.bounds.lb,
-			opt_prob.linear_constraints.bounds.ub
-		),
-		opt.NonlinearConstraint(
-			opt_prob.nonlinear_constraints.fun,
-			opt_prob.nonlinear_constraints.bounds.lb,
-			opt_prob.nonlinear_constraints.bounds.ub
-		)
-	]
-	init_bounds_lb = np.array(opt_prob.dvars.bounds.lb)
-	init_bounds_ub = np.array(opt_prob.dvars.bounds.ub)
-	ix_int = copy.copy(opt_prob.dvars.ix_int)
-	x_nlp = np.array(x_nlp)
-
-	while True:
-		x_int = x_nlp[ix_int]
-		x_dist_int = np.amin([np.ceil(x_int) - x_int, x_int - np.floor(x_int)], axis=0)
-		ix = np.argmin(x_dist_int)
-		round_val = np.round(x_nlp[ix_int][ix])
-		init_bounds_lb[ix_int[ix]] = round_val
-		init_bounds_ub[ix_int[ix]] = round_val
-
-		res = opt.minimize(
-			fun=opt_prob.objective.fun,
-			bounds=opt.Bounds(init_bounds_lb, init_bounds_ub),
-			constraints=constraints,
-			x0=x_nlp,
-			method="trust-constr",
-			options={'verbose': 0, "maxiter": 200}
-		)
-		if (not res.success) or (res.constr_violation > 1e-6):
-			raise ValueError("Feasible solution not found!")
-
-		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
-		print(res)
-		if len(ix_int) <= 1:
-			return res
-		x_nlp = res["x"]
-		ix_int = np.delete(ix_int, ix)
-
 	return res
 
 ####################################################################################################
@@ -158,7 +110,7 @@ class scipy_refiner_optimizer:
 		return res
 
 ####################################################################################################
-# Проекция недопустимой точки на допустимую область
+# Проекция недопустимой точки на допустимую область (без учёта целочисленности)
 ####################################################################################################
 
 # Класс для проекции недопустимого решения на допустимую область с релаксацией целочисленности
@@ -195,6 +147,162 @@ class scipy_projector_optimizer:
 		)
 		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
 		return res
+
+####################################################################################################
+# Попытка получить допустимое решение
+####################################################################################################
+"""
+1. Берём NLP-решение
+2. Находим переменную, самую близкую к целочисленной (из тех, что должны быть целочисленными)
+3. Округляем её и фиксируем значение
+4. Находим новое NLP-решение 
+5. GOTO 2.
+"""
+def get_feasible_solution1(opt_prob, x_nlp):
+	constraints = [
+		opt.LinearConstraint(
+			opt_prob.linear_constraints.A,
+			opt_prob.linear_constraints.bounds.lb,
+			opt_prob.linear_constraints.bounds.ub
+		),
+		opt.NonlinearConstraint(
+			opt_prob.nonlinear_constraints.fun,
+			opt_prob.nonlinear_constraints.bounds.lb,
+			opt_prob.nonlinear_constraints.bounds.ub
+		)
+	]
+	init_bounds_lb = np.array(opt_prob.dvars.bounds.lb)
+	init_bounds_ub = np.array(opt_prob.dvars.bounds.ub)
+	ix_int = copy.copy(opt_prob.dvars.ix_int)
+	x_nlp = np.array(x_nlp)
+
+	while True:
+		# значения переменных решения, которые должны быть целочисленными
+		x_int = x_nlp[ix_int]
+		# Отклонение значений от целочисленных
+		x_dist_int = np.amin([np.ceil(x_int) - x_int, x_int - np.floor(x_int)], axis=0)
+		# Берём минимальное
+		ix = np.argmin(x_dist_int)
+		# округляем
+		round_val = np.round(x_nlp[ix_int][ix])
+		# Фиксируем значение этой переменной
+		init_bounds_lb[ix_int[ix]] = round_val
+		init_bounds_ub[ix_int[ix]] = round_val
+		# Получаем новое NLP-решение
+		res = opt.minimize(
+			fun=opt_prob.objective.fun,
+			bounds=opt.Bounds(init_bounds_lb, init_bounds_ub),
+			constraints=constraints,
+			x0=x_nlp,
+			method="trust-constr",
+			options={'verbose': 0, "maxiter": 200}
+		)
+		if (not res.success) or (res.constr_violation > 1e-6):
+			raise ValueError("Feasible solution not found!")
+
+		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+		print(res)
+		# не осталось больше целочисленных компонент, которые мы ещё не зафикисировали
+		if len(ix_int) <= 1:
+			return res
+		x_nlp = res["x"]
+		# удаляем из целочисленных индексов уже зафиксированный
+		ix_int = np.delete(ix_int, ix)
+
+
+"""
+Последовательное приближение друг к другу NLP и MILP решений.
+1. Берём оптимальное NLP-решение
+2. Находим самое близкое к NLP-решению целочисленное решение MILP только с линейными ограничениями. Если оно допустимо - возвращаем его.
+Если нет - добавляем к задаче линеаризованные ограничения в виде касательных.
+3. Находим новое NLP-решение как самую близкую точку к решению MILP из 2.
+4. GOTO 2.
+"""
+def get_feasible_solution2(opt_prob, x_nlp):
+	# NLP-описание задачи (проектор)
+	NLP_projector = scipy_projector_optimizer(opt_prob)
+
+	# MILP-описание задачи
+	model_milp = pyomo.ConcreteModel()
+	# целочисленные переменные решения
+	model_milp.x_int = pyomo.Var(
+		opt_prob.dvars.ix_int,
+		domain=pyomo.Integers,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
+	# непрерывные переменные решения
+	model_milp.x_cont = pyomo.Var(
+		[i for i in range(opt_prob.dvars.n) if i not in opt_prob.dvars.ix_int],
+		domain=pyomo.Reals,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
+	ix_cont = [i for i in model_milp.x_cont_index]
+	ix_int = [i for i in model_milp.x_int_index]
+	# все переменные решения
+	x_var = []
+	for i in range(opt_prob.dvars.n):
+		if i in ix_cont:
+			x_var.append(model_milp.x_cont[i])
+		elif i in ix_int:
+			x_var.append(model_milp.x_int[i])
+		else:
+			raise ValueError("Недопустимый индекс {0}!".format(i))
+	# линейные ограничения
+	model_milp.lin_cons = pyomo.ConstraintList()
+	for j in range(opt_prob.linear_constraints.m):
+		expr = np.matmul(opt_prob.linear_constraints.A[j], x_var)
+		expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
+		expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
+		model_milp.lin_cons.add(expr1)
+		model_milp.lin_cons.add(expr2)
+	# вспомогательные ограничения при линеаризации
+	model_milp.non_lin_cons = pyomo.ConstraintList()
+	# ограничения цели
+	model_milp.mu = pyomo.Var(domain=pyomo.NonNegativeReals)
+	model_milp.obj = pyomo.Objective(expr=model_milp.mu, sense=pyomo.minimize)
+	model_milp.obj_cons = pyomo.ConstraintList()
+	prev_dist = np.Inf
+
+	while True:
+		# MILP итерация решения
+		model_milp.obj_cons.clear()
+		for i in range(opt_prob.dvars.n):
+			model_milp.obj_cons.add(x_var[i] - x_nlp[i] <= model_milp.mu)
+			model_milp.obj_cons.add(x_var[i] - x_nlp[i] >= -model_milp.mu)
+		# решаем: находим самое близкое MILP-решение к NLP-решению
+		sf = pyomo.SolverFactory("cbc")
+		result = sf.solve(model_milp, tee=False, warmstart=True)
+		if result.Solver()["Termination condition"] == pyomo.TerminationCondition.infeasible:
+			raise ValueError("Не найдено MILP-решение!")
+		x_milp = [pyomo.value(x) for x in x_var]
+		print("MILP: " + str(x_milp))
+		if (opt_prob.nonlinear_constraints == None) or (
+			np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) <= np.array(opt_prob.nonlinear_constraints.bounds.ub)) and \
+			np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) >= np.array(opt_prob.nonlinear_constraints.bounds.lb))
+		):
+			return x_milp
+		dist = np.sqrt(sum((x_nlp[i] - x_milp[i])**2 for i in range(opt_prob.dvars.n)))
+		print(dist)
+		if dist >= prev_dist:
+			raise ValueError("Расстояние между MILP и NLP решениями не уменьшается!")
+		prev_dist = dist
+		# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= 0, Т.Е., ВЕРХНЯЯ ГРАНИЦА 0, А НИЖНЕЙ НЕТ
+		ix_violated = np.where(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) > 0)[0]
+		# добавляем линеаризованные ограничения
+		gradg = opt.slsqp.approx_jacobian(x_milp, lambda x: np.array(opt_prob.nonlinear_constraints.fun(x))[ix_violated], epsilon=1e-9)
+		gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))[ix_violated]
+		for i in range(len(ix_violated)):
+			expr = gx + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= 0
+			model_milp.non_lin_cons.add(expr)
+
+		# итерация NLP-приближения к MILP-решению
+		nlp_projector = NLP_projector.get_solution(x_milp)
+		if (not nlp_projector["success"]) or (nlp_projector["constr_violation"] >= 1e-6):
+			raise ValueError("Не найдено NLP-решение!!")
+		x_nlp = nlp_projector["x"]
+		print("NLP: " + str(x_nlp))
 
 ####################################################################################################
 # Обёртка описания задачи MIP в виде pyomo

@@ -94,12 +94,6 @@ nlp_lower_bound = res_NLP["obj"]
 # mg_minlp.get_NLP_lower_bound(opt_prob, custom_linear_constraints=mg_minlp.linear_constraints(1, [[1,0,0]], mg_minlp.bounds([3], [4])))
 
 ####################################################################################################
-# Получение допустимого решения как приближения непрерывного
-####################################################################################################
-importlib.reload(mg_minlp)
-init_feasible = mg_minlp.get_feasible_solution(opt_prob, res_NLP["x"]) #[0.60296657, 2.33647076, 2.48721229])
-
-####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
 ####################################################################################################
 scipy_refiner_optimizer_obj = mg_minlp.scipy_refiner_optimizer(opt_prob)
@@ -112,6 +106,13 @@ scipy_refiner_optimizer_obj = mg_minlp.scipy_refiner_optimizer(opt_prob)
 scipy_projector_optimizer_obj = mg_minlp.scipy_projector_optimizer(opt_prob)
 # project = scipy_projector_optimizer_obj.get_solution([5, 6, 7])
 # print(project)
+
+####################################################################################################
+# Получение допустимого решения как приближения непрерывного
+####################################################################################################
+importlib.reload(mg_minlp)
+init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"]) #[0.60296657, 2.33647076, 2.48721229])
+init_feasible2 = mg_minlp.get_feasible_solution2(opt_prob, res_NLP["x"])
 
 ##############################################################################
 # Задача как MILP Pyomo
