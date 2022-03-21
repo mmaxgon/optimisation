@@ -55,8 +55,8 @@ def constr_demand(model, c):
 
 # функция цели
 def goal(model):
-    # return sum([T[c,s] * model.x[c,s] for c in CUS for s in SRC])
-    return sum([T[c,s] * model.x[c,s]**2 for c in CUS for s in SRC])
+    return sum([T[c,s] * model.x[c,s] for c in CUS for s in SRC])
+    # return sum([T[c,s] * model.x[c,s]**2 for c in CUS for s in SRC])
 
 #####################################################################################
 # Create an instance of the model
@@ -65,6 +65,18 @@ model.dual = pe.Suffix(direction = pe.Suffix.IMPORT)
 
 # Define the decision 
 model.x = pe.Var(CUS, SRC, domain = pe.NonNegativeIntegers, bounds = f_bounds)
+model.y = pe.Var(CUS, SRC, domain = pe.Binary)
+
+NBIG = 1e3
+model.logical = pe.ConstraintList()
+for c in CUS:
+    for s in SRC:
+	    # model.y[c, s] == 0 => model.x <= 0
+		model.logical.add(expr=-NBIG * model.y[c, s] + model.x[c, s] <= 0)
+	    # model.y[c, s] == 0 => model.x >= 0
+		model.logical.add(expr=NBIG * model.y[c, s] + model.x[c, s] >= 0)
+	    # model.y[c, s] == 1 => model.x > 0
+		model.logical.add(expr=NBIG * (1 - model.y[c, s]) + model.x[c, s] >= 1)
 
 # Define Objective
 model.Cost = pe.Objective(
@@ -103,7 +115,7 @@ results.write()
 # Solution
 for c in CUS:
     for s in SRC:
-        print(c, s, model.x[c, s]())
+        print(c, s, model.x[c, s](), model.y[c, s]())
 		
 # Goal
 print(model.Cost())
