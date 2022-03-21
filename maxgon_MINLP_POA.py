@@ -251,12 +251,13 @@ def get_feasible_solution2(opt_prob, x_nlp):
 			raise ValueError("Недопустимый индекс {0}!".format(i))
 	# линейные ограничения
 	model_milp.lin_cons = pyomo.ConstraintList()
-	for j in range(opt_prob.linear_constraints.m):
-		expr = np.matmul(opt_prob.linear_constraints.A[j], x_var)
-		expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
-		expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
-		model_milp.lin_cons.add(expr1)
-		model_milp.lin_cons.add(expr2)
+	if model_milp.lin_cons != None:
+		for j in range(opt_prob.linear_constraints.m):
+			expr = np.matmul(opt_prob.linear_constraints.A[j], x_var)
+			expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
+			expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
+			model_milp.lin_cons.add(expr1)
+			model_milp.lin_cons.add(expr2)
 	# вспомогательные ограничения при линеаризации
 	model_milp.non_lin_cons = pyomo.ConstraintList()
 	# ограничения цели
@@ -268,6 +269,7 @@ def get_feasible_solution2(opt_prob, x_nlp):
 	while True:
 		# MILP итерация решения
 		model_milp.obj_cons.clear()
+		# Функция цели - L1-расстояние до NLP-решения
 		for i in range(opt_prob.dvars.n):
 			model_milp.obj_cons.add(x_var[i] - x_nlp[i] <= model_milp.mu)
 			model_milp.obj_cons.add(x_var[i] - x_nlp[i] >= -model_milp.mu)
@@ -304,6 +306,119 @@ def get_feasible_solution2(opt_prob, x_nlp):
 		x_nlp = nlp_projector["x"]
 		print("NLP: " + str(x_nlp))
 
+####################################################################################################
+# Решение простой MINLP задачи с помощью pyomo+cbc на основании описания задачи в виде optimization_problem
+####################################################################################################
+def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
+	def if_nonlinconstr_sutisffied(x_milp):
+		if opt_prob.nonlinear_constraints == None:
+			return True
+		if np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) <= np.array(opt_prob.nonlinear_constraints.bounds.ub)) and \
+				np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) >= np.array(opt_prob.nonlinear_constraints.bounds.lb)):
+			return True
+		return False
+	
+	# MILP-описание задачи
+	model_milp = pyomo.ConcreteModel()
+	# целочисленные переменные решения
+	model_milp.x_int = pyomo.Var(
+		opt_prob.dvars.ix_int,
+		domain=pyomo.Integers,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
+	# непрерывные переменные решения
+	model_milp.x_cont = pyomo.Var(
+		[i for i in range(opt_prob.dvars.n) if i not in opt_prob.dvars.ix_int],
+		domain=pyomo.Reals,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
+	ix_cont = [i for i in model_milp.x_cont_index]
+	ix_int = [i for i in model_milp.x_int_index]
+	# все переменные решения
+	x_var = []
+	for i in range(opt_prob.dvars.n):
+		if i in ix_cont:
+			x_var.append(model_milp.x_cont[i])
+		elif i in ix_int:
+			x_var.append(model_milp.x_int[i])
+		else:
+			raise ValueError("Недопустимый индекс {0}!".format(i))
+	# линейные ограничения
+	model_milp.lin_cons = pyomo.ConstraintList()
+	if model_milp.lin_cons != None:
+		for j in range(opt_prob.linear_constraints.m):
+			expr = np.matmul(opt_prob.linear_constraints.A[j], x_var)
+			expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
+			expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
+			model_milp.lin_cons.add(expr1)
+			model_milp.lin_cons.add(expr2)
+	# ограничения при линеаризации нелинейных ограничений
+	model_milp.non_lin_cons = pyomo.ConstraintList()
+	# ограничения при линеаризации функции цели
+	model_milp.obj_cons = pyomo.ConstraintList()
+	# вспомогательная функция цели
+	model_milp.mu = pyomo.Var(domain=pyomo.Reals)
+	model_milp.temp_mu = pyomo.Constraint(expr=model_milp.mu >= -1e9)
+	model_milp.obj = pyomo.Objective(expr=model_milp.mu, sense=pyomo.minimize)
+	
+	# начальные значения
+	lower_bound = -np.Inf
+	upper_bound = np.Inf
+	best_sol = None
+	if_first_step = True
+	sf = pyomo.SolverFactory("cbc")
+	
+	while True:
+		# MILP итерация решения
+		# решаем: находим самое близкое MILP-решение к NLP-решению
+		result = sf.solve(model_milp, tee=False, warmstart=True)
+		if result.Solver()["Termination condition"] == pyomo.TerminationCondition.infeasible:
+			raise ValueError("Не найдено MILP-решение!")
+		if if_first_step:
+			if_first_step = False
+			model_milp.del_component(model_milp.temp_mu)
+		# значения переменных решения
+		x_milp = list(map(pyomo.value, x_var))
+		print("MILP: " + str(x_milp))
+		obj = model_milp.mu.value
+		lower_bound = obj
+		fx = opt_prob.objective.fun(x_milp)
+		# линеаризованное ограничение на функцию цели
+		gradf = opt.approx_fprime(x_milp, opt_prob.objective.fun, epsilon=1e-6)
+		xgradf = np.dot(x_milp, gradf)
+		expr = fx + sum(gradf[j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
+		# print(expr)
+		model_milp.obj_cons.add(expr)
+		
+		if if_nonlinconstr_sutisffied(x_milp):
+			print("feasible")
+			if fx < upper_bound:
+				upper_bound = fx
+				best_sol = copy.copy(x_milp)
+				
+			if (lower_bound > upper_bound):
+				raise ValueError("lower_bound > upper_bound!")
+			if (upper_bound - lower_bound < obj_tolerance):
+				res = {"obj": upper_bound, "x": best_sol}
+				print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
+				return res
+		else:
+			# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= 0, Т.Е., ВЕРХНЯЯ ГРАНИЦА 0, А НИЖНЕЙ НЕТ
+			ix_violated = np.where(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) > 0)[0]
+			# добавляем линеаризованные ограничения
+			gradg = opt.slsqp.approx_jacobian(x_milp, lambda x: np.array(opt_prob.nonlinear_constraints.fun(x))[ix_violated], epsilon=1e-9)
+			gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))[ix_violated]
+			for i in range(len(ix_violated)):
+				expr = gx + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= 0
+				model_milp.non_lin_cons.add(expr)
+
+		print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
+
+####################################################################################################
+# Решение сложных MINLP задач с помощью описания на одном из фреймворков PYOMO, CP_SAT, GEKKO, CPLEX
+####################################################################################################
 ####################################################################################################
 # Обёртка описания задачи MIP в виде pyomo
 ####################################################################################################
