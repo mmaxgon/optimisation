@@ -411,8 +411,8 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
 				print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
 				return res
 		else:
-			# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= 0, Т.Е., ВЕРХНЯЯ ГРАНИЦА 0, А НИЖНЕЙ НЕТ
-			ix_violated = np.where(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) > 0)[0]
+			# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= ub, Т.Е., ВЕРХНЯЯ ГРАНИЦА ub, А НИЖНЕЙ НЕТ
+			ix_violated = np.where(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) > opt_prob.nonlinear_constraints.bounds.ub)[0]
 			# добавляем линеаризованные ограничения
 			gradg = opt.slsqp.approx_jacobian(x_milp, lambda x: np.array(opt_prob.nonlinear_constraints.fun(x))[ix_violated], epsilon=1e-9)
 			gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))[ix_violated]
