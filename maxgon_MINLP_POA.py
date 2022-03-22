@@ -20,7 +20,7 @@ bounds = namedtuple("bounds", ["lb", "ub"])
 # Переменные решения
 dvars = namedtuple("dvars", ["n", "ix_int", "ix_cont", "bounds", "x0"])
 # Цель
-objective = namedtuple("objective", ["n", "fun"])
+objective = namedtuple("objective", ["n", "if_linear", "fun"])
 # Линейные ограничения
 linear_constraints = namedtuple("linear_constraints", ["m", "A", "bounds"])
 # Нелинейные ограничения
@@ -360,7 +360,10 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
 	model_milp.obj_cons = pyomo.ConstraintList()
 	# вспомогательная функция цели
 	model_milp.mu = pyomo.Var(domain=pyomo.Reals)
-	model_milp.temp_mu = pyomo.Constraint(expr=model_milp.mu >= -1e9)
+	if opt_prob.objective.if_linear:
+		model_milp.obj_cons.add(expr=opt_prob.objective.fun(x_var) <= model_milp.mu)
+	else:
+		model_milp.temp_mu = pyomo.Constraint(expr=model_milp.mu >= -1e9)
 	model_milp.obj = pyomo.Objective(expr=model_milp.mu, sense=pyomo.minimize)
 	
 	# начальные значения
@@ -376,21 +379,24 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
 		result = sf.solve(model_milp, tee=False, warmstart=True)
 		if result.Solver()["Termination condition"] == pyomo.TerminationCondition.infeasible:
 			raise ValueError("Не найдено MILP-решение!")
-		if if_first_step:
+		if if_first_step and not opt_prob.objective.if_linear:
 			if_first_step = False
 			model_milp.del_component(model_milp.temp_mu)
 		# значения переменных решения
 		x_milp = list(map(pyomo.value, x_var))
 		print("MILP: " + str(x_milp))
+		# значение целевой функции вспомогательной задачи
 		obj = model_milp.mu.value
 		lower_bound = obj
+		# значение целевой функции исходной задачи (совпадают в случае линейности цели)
 		fx = opt_prob.objective.fun(x_milp)
 		# линеаризованное ограничение на функцию цели
-		gradf = opt.approx_fprime(x_milp, opt_prob.objective.fun, epsilon=1e-6)
-		xgradf = np.dot(x_milp, gradf)
-		expr = fx + sum(gradf[j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
-		# print(expr)
-		model_milp.obj_cons.add(expr)
+		if not opt_prob.objective.if_linear:
+			gradf = opt.approx_fprime(x_milp, opt_prob.objective.fun, epsilon=1e-6)
+			xgradf = np.dot(x_milp, gradf)
+			expr = fx + sum(gradf[j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
+			# print(expr)
+			model_milp.obj_cons.add(expr)
 		
 		if if_nonlinconstr_sutisffied(x_milp):
 			print("feasible")

@@ -45,7 +45,9 @@ decision_vars = mg_minlp.dvars(3, [1, 2], [0], mg_minlp.bounds([0, 0, 0], [10, 1
 # Целевая функция
 def obj(x):
 	return -(1000 - x[0]**2 - 2*x[1]**2 - x[2]**2 - x[0]*x[1] - x[0]*x[2])
-objective_fun = mg_minlp.objective(3, obj)
+	# return 2*x[0] + 3*x[1] + 4*x[2]
+# objective_fun = mg_minlp.objective(3, True, obj)
+objective_fun = mg_minlp.objective(3, False, obj)
 
 # Нелинейные ограничения
 def non_lin_cons_fun(x):
@@ -86,6 +88,7 @@ opt_prob_cp = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_co
 ####################################################################################################
 # Получение решения из описания opt_prob
 ####################################################################################################
+importlib.reload(mg_minlp)
 sol = mg_minlp.get_minlp_solution(opt_prob)
 print(sol)
 ####################################################################################################
