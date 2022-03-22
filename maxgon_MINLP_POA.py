@@ -318,6 +318,36 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 			return True
 		return False
 	
+	def add_obj_constraints(x, dvar_x, fx=None):
+		if fx is None:
+			fx = opt_prob.objective.fun(x)
+		gradf = opt.approx_fprime(x, opt_prob.objective.fun, epsilon=1e-9)
+		expr = fx + sum(gradf[j] * (dvar_x[j] - x[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
+		# print(expr)
+		model_milp.obj_cons.add(expr)
+	
+	def add_nonlin_constraints(x, dvar_x, ix=None, gx=None):
+		if ix is None:
+			ix = np.array(range(opt_prob.nonlinear_constraints.m))
+		else:
+			ix = np.array(ix)
+			
+		if gx is None:
+			gx = np.array(opt_prob.nonlinear_constraints.fun(x))[ix]
+		else:
+			gx = np.array(gx)[ix]
+		
+		gradg = opt.slsqp.approx_jacobian(
+			x,
+			lambda y: np.array(opt_prob.nonlinear_constraints.fun(y))[ix],
+			epsilon=1e-9
+		)
+		ub = np.array(opt_prob.nonlinear_constraints.bounds.ub)[ix_violated]
+		for i in range(len(ix_violated)):
+			expr = gx[i] + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= ub[i]
+			# print(expr)
+			model_milp.non_lin_cons.add(expr)
+		
 	if if_nlp_lower_bound:
 		res_NLP = get_NLP_lower_bound(opt_prob)
 		if not (res_NLP["success"] and res_NLP["constr_violation"] <= 1e-6):
@@ -415,13 +445,9 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 				x_milp = x_refine
 		# значение целевой функции исходной задачи (совпадает с вспомогательной в случае линейности цели)
 		fx = opt_prob.objective.fun(x_milp)
-		# линеаризованное ограничение на функцию цели
+		# добавляем линейное ограничение на функцию цели в виде касательной в точке x_milp
 		if not opt_prob.objective.if_linear:
-			gradf = opt.approx_fprime(x_milp, opt_prob.objective.fun, epsilon=1e-6)
-			xgradf = np.dot(x_milp, gradf)
-			expr = fx + sum(gradf[j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
-			# print(expr)
-			model_milp.obj_cons.add(expr)
+			add_obj_constraints(x=x_milp, dvar_x=x_var, fx=fx)
 		
 		if if_nonlinconstr_sutisffied(x_milp):
 			print("feasible")
@@ -437,7 +463,8 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 				return res
 		else:
 			# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= ub, Т.Е., ВЕРХНЯЯ ГРАНИЦА ub, А НИЖНЕЙ НЕТ
-			ix_violated = np.where(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) > opt_prob.nonlinear_constraints.bounds.ub)[0]
+			gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))
+			ix_violated = np.where(gx > opt_prob.nonlinear_constraints.bounds.ub)[0]
 			# проецируем решение вспомогательной задачи на допустимую область
 			if if_project:
 				project = scipy_projector_optimizer_obj.get_solution(x_milp)
@@ -445,12 +472,9 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 					x_project = project["x"]
 					print("Projected: {0}".format(x_project))
 					x_milp = x_project
-			# добавляем линеаризованные ограничения
-			gradg = opt.slsqp.approx_jacobian(x_milp, lambda x: np.array(opt_prob.nonlinear_constraints.fun(x))[ix_violated], epsilon=1e-9)
-			gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))[ix_violated]
-			for i in range(len(ix_violated)):
-				expr = gx + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= 0
-				model_milp.non_lin_cons.add(expr)
+					gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))
+			# добавляем линейные ограничения в виде касательных к нарушенным нелинейным ограничениям в точке x_milp
+			add_nonlin_constraints(x=x_milp, dvar_x=x_var, ix=ix_violated, gx=gx)
 
 		print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
 

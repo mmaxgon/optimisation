@@ -89,7 +89,7 @@ opt_prob_cp = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_co
 # Получение решения из описания opt_prob
 ####################################################################################################
 importlib.reload(mg_minlp)
-sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=True, if_refine=False, if_project=True)
+sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=True)
 print(sol)
 ####################################################################################################
 # Получение решения из описаний на различных фреймворках
