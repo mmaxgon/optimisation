@@ -309,7 +309,7 @@ def get_feasible_solution2(opt_prob, x_nlp):
 ####################################################################################################
 # Решение простой MINLP задачи с помощью pyomo+cbc на основании описания задачи в виде optimization_problem
 ####################################################################################################
-def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_refine=False, if_project=False):
+def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, if_refine=False, if_project=False):
 	def if_nonlinconstr_sutisffied(x_milp):
 		if opt_prob.nonlinear_constraints == None:
 			return True
@@ -318,6 +318,11 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_refine=False, if_project
 			return True
 		return False
 	
+	if if_nlp_lower_bound:
+		res_NLP = get_NLP_lower_bound(opt_prob)
+		if not (res_NLP["success"] and res_NLP["constr_violation"] <= 1e-6):
+			raise ValueError("Нет NLP-решения!")
+		nlp_lower_bound = res_NLP["obj"]
 	if if_refine:
 		scipy_refiner_optimizer_obj = scipy_refiner_optimizer(opt_prob)
 	if if_project:
@@ -372,7 +377,12 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_refine=False, if_project
 	model_milp.obj = pyomo.Objective(expr=model_milp.mu, sense=pyomo.minimize)
 	
 	# начальные значения
-	lower_bound = -np.Inf
+	# lower_bound = nlp_lower_bound if if_nlp_lower_bound else -np.Inf
+	prev_obj = -np.inf
+	if if_nlp_lower_bound:
+		lower_bound = nlp_lower_bound
+	else:
+		lower_bound = -np.Inf
 	upper_bound = np.Inf
 	best_sol = None
 	if_first_step = True
@@ -392,7 +402,10 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_refine=False, if_project
 		print("MILP: " + str(x_milp))
 		# значение целевой функции вспомогательной задачи
 		obj = model_milp.mu.value
-		lower_bound = obj
+		if obj < prev_obj:
+			raise ValueError("Значение целевой функции вспомогательной задачи не может уменьшаться!")
+		prev_obj = obj
+		lower_bound = max(lower_bound, obj)
 		# фиксируем целочисленные переменные, оптимизируем по непрерывным
 		if if_refine:
 			refine = scipy_refiner_optimizer_obj.get_solution(x_milp)
