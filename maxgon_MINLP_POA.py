@@ -309,7 +309,7 @@ def get_feasible_solution2(opt_prob, x_nlp):
 ####################################################################################################
 # Решение простой MINLP задачи с помощью pyomo+cbc на основании описания задачи в виде optimization_problem
 ####################################################################################################
-def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
+def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_refine=False, if_project=False):
 	def if_nonlinconstr_sutisffied(x_milp):
 		if opt_prob.nonlinear_constraints == None:
 			return True
@@ -318,6 +318,11 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
 			return True
 		return False
 	
+	if if_refine:
+		scipy_refiner_optimizer_obj = scipy_refiner_optimizer(opt_prob)
+	if if_project:
+		scipy_projector_optimizer_obj = scipy_projector_optimizer(opt_prob)
+		
 	# MILP-описание задачи
 	model_milp = pyomo.ConcreteModel()
 	# целочисленные переменные решения
@@ -388,7 +393,14 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
 		# значение целевой функции вспомогательной задачи
 		obj = model_milp.mu.value
 		lower_bound = obj
-		# значение целевой функции исходной задачи (совпадают в случае линейности цели)
+		# фиксируем целочисленные переменные, оптимизируем по непрерывным
+		if if_refine:
+			refine = scipy_refiner_optimizer_obj.get_solution(x_milp)
+			if refine["success"] and refine["constr_violation"] < 1e-6:
+				x_refine = refine["x"]
+				print("Refined: {0}".format(x_refine))
+				x_milp = x_refine
+		# значение целевой функции исходной задачи (совпадает с вспомогательной в случае линейности цели)
 		fx = opt_prob.objective.fun(x_milp)
 		# линеаризованное ограничение на функцию цели
 		if not opt_prob.objective.if_linear:
@@ -413,6 +425,13 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6):
 		else:
 			# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= ub, Т.Е., ВЕРХНЯЯ ГРАНИЦА ub, А НИЖНЕЙ НЕТ
 			ix_violated = np.where(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) > opt_prob.nonlinear_constraints.bounds.ub)[0]
+			# проецируем решение вспомогательной задачи на допустимую область
+			if if_project:
+				project = scipy_projector_optimizer_obj.get_solution(x_milp)
+				if project["success"] and project["constr_violation"] < 1e-6:
+					x_project = project["x"]
+					print("Projected: {0}".format(x_project))
+					x_milp = x_project
 			# добавляем линеаризованные ограничения
 			gradg = opt.slsqp.approx_jacobian(x_milp, lambda x: np.array(opt_prob.nonlinear_constraints.fun(x))[ix_violated], epsilon=1e-9)
 			gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))[ix_violated]
