@@ -309,15 +309,25 @@ def get_feasible_solution2(opt_prob, x_nlp):
 ####################################################################################################
 # Решение простой MINLP задачи с помощью pyomo+cbc на основании описания задачи в виде optimization_problem
 ####################################################################################################
-def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, if_refine=False, if_project=False):
-	def if_nonlinconstr_sutisffied(x_milp):
-		if opt_prob.nonlinear_constraints == None:
-			return True
-		if np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) <= np.array(opt_prob.nonlinear_constraints.bounds.ub)) and \
-				np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) >= np.array(opt_prob.nonlinear_constraints.bounds.lb)):
-			return True
-		return False
+def get_minlp_solution(
+	opt_prob,                       # описание задачи
+	obj_tolerance=1e-6,             # разница между upper_bound и lower_bound
+	if_nlp_lower_bound=False,       # нужно ли рассчитывать нижнюю границу NLP-задачи в начале
+	if_refine=False,                # нужно ли после каждого MILP-решения фиксировать целочисленные переменные и уточнять непрерывные
+	if_project=False,               # нужно ли проецировать недопустимое решение на допустимое множество и строить касательные к нелинейным ограничениям в точке проекции
+	random_points_count=0           # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
+):
+	# случайные точки внутри диапазона
+	def generate_x():
+		x = []
+		for i in range(opt_prob.dvars.n):
+			lb = opt_prob.dvars.bounds.lb[i]
+			ub = opt_prob.dvars.bounds.ub[i]
+			res = np.random.randint(lb, ub) if i in opt_prob.dvars.ix_int else (ub - lb) * np.random.random_sample()
+			x.append(res)
+		return x
 	
+	# добавление линейных ограничений в качестве касательных к нелинейной функции цели в точке x
 	def add_obj_constraints(x, dvar_x, fx=None):
 		if fx is None:
 			fx = opt_prob.objective.fun(x)
@@ -326,6 +336,7 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 		# print(expr)
 		model_milp.obj_cons.add(expr)
 	
+	# добавление линейных ограничений в качестве касательных к нелинейным ограничениям в точке x
 	def add_nonlin_constraints(x, dvar_x, ix=None, gx=None):
 		if ix is None:
 			ix = np.array(range(opt_prob.nonlinear_constraints.m))
@@ -342,19 +353,23 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 			lambda y: np.array(opt_prob.nonlinear_constraints.fun(y))[ix],
 			epsilon=1e-9
 		)
-		ub = np.array(opt_prob.nonlinear_constraints.bounds.ub)[ix_violated]
-		for i in range(len(ix_violated)):
+		ub = np.array(opt_prob.nonlinear_constraints.bounds.ub)[ix]
+		for i in range(len(ix)):
 			expr = gx[i] + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= ub[i]
 			# print(expr)
-			model_milp.non_lin_cons.add(expr)
-		
+			if (str(expr) != "True"):
+				model_milp.non_lin_cons.add(expr)
+	
+	# Рассчитываем решение NLP-задачи для получения нижней границы
 	if if_nlp_lower_bound:
 		res_NLP = get_NLP_lower_bound(opt_prob)
 		if not (res_NLP["success"] and res_NLP["constr_violation"] <= 1e-6):
 			raise ValueError("Нет NLP-решения!")
 		nlp_lower_bound = res_NLP["obj"]
+	# Объект для уточнения непрерывных переменных решения при фиксации целочисленных
 	if if_refine:
 		scipy_refiner_optimizer_obj = scipy_refiner_optimizer(opt_prob)
+	# Объект проекции недопустимого решения на допустимое множество
 	if if_project:
 		scipy_projector_optimizer_obj = scipy_projector_optimizer(opt_prob)
 		
@@ -374,6 +389,7 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
 		initialize=lambda model, i: opt_prob.dvars.x0[i]
 	)
+	# индекси для непрерывных и целочисленных переменных
 	ix_cont = [i for i in model_milp.x_cont_index]
 	ix_int = [i for i in model_milp.x_int_index]
 	# все переменные решения
@@ -390,13 +406,15 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 	if model_milp.lin_cons != None:
 		for j in range(opt_prob.linear_constraints.m):
 			expr = np.matmul(opt_prob.linear_constraints.A[j], x_var)
-			expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
-			expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
-			model_milp.lin_cons.add(expr1)
-			model_milp.lin_cons.add(expr2)
+			if opt_prob.linear_constraints.bounds.ub[j] < np.Inf:
+				expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
+				model_milp.lin_cons.add(expr1)
+			if opt_prob.linear_constraints.bounds.lb[j] > -np.Inf:
+				expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
+				model_milp.lin_cons.add(expr2)
 	# ограничения при линеаризации нелинейных ограничений
 	model_milp.non_lin_cons = pyomo.ConstraintList()
-	# ограничения при линеаризации функции цели
+	# ограничения при линеаризации нелинейной функции цели
 	model_milp.obj_cons = pyomo.ConstraintList()
 	# вспомогательная функция цели
 	model_milp.mu = pyomo.Var(domain=pyomo.Reals)
@@ -404,11 +422,13 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 		model_milp.obj_cons.add(expr=opt_prob.objective.fun(x_var) <= model_milp.mu)
 	else:
 		model_milp.temp_mu = pyomo.Constraint(expr=model_milp.mu >= -1e9)
+	# минимизируем вспомогательную переменную mu
 	model_milp.obj = pyomo.Objective(expr=model_milp.mu, sense=pyomo.minimize)
 	
 	# начальные значения
 	# lower_bound = nlp_lower_bound if if_nlp_lower_bound else -np.Inf
 	prev_obj = -np.inf
+	obj = np.Inf
 	if if_nlp_lower_bound:
 		lower_bound = nlp_lower_bound
 	else:
@@ -417,13 +437,29 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 	best_sol = None
 	if_first_step = True
 	sf = pyomo.SolverFactory("cbc")
+	step_num = 0
 	
 	while True:
+		step_num += 1
+
+		# Сначала генерим случайные точки и строим в них касательные к нелинейным объектам,
+		# чтобы лучше аппроксимировать нелинейные ограничения и функцию цели до начала решения MILP-задачи
+		if step_num <= random_points_count:
+			x_milp = generate_x()
+			print("Random: " + str(x_milp))
+			# добавляем касательную к функции цели
+			if not opt_prob.objective.if_linear:
+				add_obj_constraints(x=x_milp, dvar_x=x_var)
+			# добавляем касательные к нелинейным ограничениям
+			if not (opt_prob.nonlinear_constraints is None):
+				add_nonlin_constraints(x=x_milp, dvar_x=x_var)
+			continue
+
 		# MILP итерация решения
-		# решаем: находим самое близкое MILP-решение к NLP-решению
 		result = sf.solve(model_milp, tee=False, warmstart=True)
 		if result.Solver()["Termination condition"] == pyomo.TerminationCondition.infeasible:
 			raise ValueError("Не найдено MILP-решение!")
+		# После первого шага удаляем временное ограничение на функцию цели снизу
 		if if_first_step and not opt_prob.objective.if_linear:
 			if_first_step = False
 			model_milp.del_component(model_milp.temp_mu)
@@ -436,6 +472,7 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 			raise ValueError("Значение целевой функции вспомогательной задачи не может уменьшаться!")
 		prev_obj = obj
 		lower_bound = max(lower_bound, obj)
+
 		# фиксируем целочисленные переменные, оптимизируем по непрерывным
 		if if_refine:
 			refine = scipy_refiner_optimizer_obj.get_solution(x_milp)
@@ -443,13 +480,25 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 				x_refine = refine["x"]
 				print("Refined: {0}".format(x_refine))
 				x_milp = x_refine
+		
 		# значение целевой функции исходной задачи (совпадает с вспомогательной в случае линейности цели)
 		fx = opt_prob.objective.fun(x_milp)
+		
 		# добавляем линейное ограничение на функцию цели в виде касательной в точке x_milp
 		if not opt_prob.objective.if_linear:
 			add_obj_constraints(x=x_milp, dvar_x=x_var, fx=fx)
+			
+		if not (opt_prob.nonlinear_constraints is None):
+			# значение нелинейных ограничений в x_milp
+			gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))
+			# индексы нарушенных нелинейных ограничений
+			# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= ub, Т.Е., ВЕРХНЯЯ ГРАНИЦА ub, А НИЖНЕЙ НЕТ
+			ix_violated = np.where(gx > opt_prob.nonlinear_constraints.bounds.ub)[0]
+		else:
+			ix_violated = []
 		
-		if if_nonlinconstr_sutisffied(x_milp):
+		# Проверка на допустимость нелинейных ограничений
+		if len(ix_violated) == 0:
 			print("feasible")
 			if fx < upper_bound:
 				upper_bound = fx
@@ -458,13 +507,10 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 			if (lower_bound > upper_bound):
 				raise ValueError("lower_bound > upper_bound!")
 			if (upper_bound - lower_bound < obj_tolerance):
-				res = {"obj": upper_bound, "x": best_sol}
+				res = {"obj": upper_bound, "x": best_sol, "step_num": step_num-random_points_count, "nonlin_constr_num": len(model_milp.non_lin_cons), "objective_constr_num": len(model_milp.obj_cons)}
 				print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
 				return res
 		else:
-			# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= ub, Т.Е., ВЕРХНЯЯ ГРАНИЦА ub, А НИЖНЕЙ НЕТ
-			gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))
-			ix_violated = np.where(gx > opt_prob.nonlinear_constraints.bounds.ub)[0]
 			# проецируем решение вспомогательной задачи на допустимую область
 			if if_project:
 				project = scipy_projector_optimizer_obj.get_solution(x_milp)
@@ -472,6 +518,7 @@ def get_minlp_solution(opt_prob, obj_tolerance=1e-6, if_nlp_lower_bound=False, i
 					x_project = project["x"]
 					print("Projected: {0}".format(x_project))
 					x_milp = x_project
+					# пересчитываем значения нелинейных ограничений в x_milp
 					gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))
 			# добавляем линейные ограничения в виде касательных к нарушенным нелинейным ограничениям в точке x_milp
 			add_nonlin_constraints(x=x_milp, dvar_x=x_var, ix=ix_violated, gx=gx)
