@@ -323,7 +323,7 @@ def get_minlp_solution(
 		for i in range(opt_prob.dvars.n):
 			lb = opt_prob.dvars.bounds.lb[i]
 			ub = opt_prob.dvars.bounds.ub[i]
-			res = np.random.randint(lb, ub) if i in opt_prob.dvars.ix_int else (ub - lb) * np.random.random_sample()
+			res = np.random.randint(lb, ub) if i in opt_prob.dvars.ix_int else lb + (ub - lb) * np.random.random_sample()
 			x.append(res)
 		return x
 	
