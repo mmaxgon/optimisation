@@ -88,7 +88,6 @@ opt_prob_cp = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_co
 ####################################################################################################
 # Получение решения из описания opt_prob
 ####################################################################################################
-importlib.reload(mg_minlp)
 sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=200)
 print(sol)
 ####################################################################################################
@@ -121,7 +120,8 @@ scipy_projector_optimizer_obj = mg_minlp.scipy_projector_optimizer(opt_prob)
 ####################################################################################################
 # Получение допустимого решения как приближения непрерывного
 ####################################################################################################
-#init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"]) #[0.60296657, 2.33647076, 2.48721229])
+# init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"])
+init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076, 2.48721229])
 init_feasible2 = mg_minlp.get_feasible_solution2(opt_prob, res_NLP["x"])
 
 ##############################################################################
@@ -454,6 +454,7 @@ res = poa.solve(
 	NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[cplex_mip_model_wrapper.get_mip_model().get_var_by_index(0) >= 1]
+	,approximation_points=approximation_points
 )
 print(time() - start_time)
 print(res)
