@@ -121,7 +121,7 @@ scipy_projector_optimizer_obj = mg_minlp.scipy_projector_optimizer(opt_prob)
 ####################################################################################################
 # Получение допустимого решения как приближения непрерывного
 ####################################################################################################
-init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"]) #[0.60296657, 2.33647076, 2.48721229])
+#init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"]) #[0.60296657, 2.33647076, 2.48721229])
 init_feasible2 = mg_minlp.get_feasible_solution2(opt_prob, res_NLP["x"])
 
 ##############################################################################
@@ -145,6 +145,7 @@ model_milp.lin_cons = pyomo.Constraint(expr=
 	opt_prob.linear_constraints.A[0][0] * model_milp.y[0] +
 	sum(opt_prob.linear_constraints.A[0][i] * model_milp.x[i] for i in opt_prob.dvars.ix_int) == opt_prob.linear_constraints.bounds.ub[0])
 
+approximation_points = [mg_minlp.generate_x(opt_prob) for i in range(200)]
 # model_milp.obj = pyomo.Objective(expr = -model_milp.x[1], sense=pyomo.minimize)
 # sf = pyomo.SolverFactory("cbc")
 # sf.options["allowableGap"] = 1e-4
@@ -610,7 +611,7 @@ print(res)
 # pyomo Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
 # с NLP
-
+importlib.reload(mg_minlp)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
@@ -631,6 +632,7 @@ res1 = poa.solve(
 	# NLP_projector_object=scipy_projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
 	,custom_constraints_list=[model.y[0] >= 1]
+	,approximation_points=approximation_points
 )
 print(time() - start_time)
 print(res1)

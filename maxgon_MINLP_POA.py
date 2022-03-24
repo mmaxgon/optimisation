@@ -309,6 +309,16 @@ def get_feasible_solution2(opt_prob, x_nlp):
 ####################################################################################################
 # Решение простой MINLP задачи с помощью pyomo+cbc на основании описания задачи в виде optimization_problem
 ####################################################################################################
+# случайные точки внутри диапазона
+def generate_x(opt_prob):
+	x = []
+	for i in range(opt_prob.dvars.n):
+		lb = opt_prob.dvars.bounds.lb[i]
+		ub = opt_prob.dvars.bounds.ub[i]
+		res = np.random.randint(lb, ub) if i in opt_prob.dvars.ix_int else lb + (ub - lb) * np.random.random_sample()
+		x.append(res)
+	return x
+	
 def get_minlp_solution(
 	opt_prob,                       # описание задачи
 	obj_tolerance=1e-6,             # разница между upper_bound и lower_bound
@@ -317,16 +327,6 @@ def get_minlp_solution(
 	if_project=False,               # нужно ли проецировать недопустимое решение на допустимое множество и строить касательные к нелинейным ограничениям в точке проекции
 	random_points_count=0           # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
 ):
-	# случайные точки внутри диапазона
-	def generate_x():
-		x = []
-		for i in range(opt_prob.dvars.n):
-			lb = opt_prob.dvars.bounds.lb[i]
-			ub = opt_prob.dvars.bounds.ub[i]
-			res = np.random.randint(lb, ub) if i in opt_prob.dvars.ix_int else lb + (ub - lb) * np.random.random_sample()
-			x.append(res)
-		return x
-	
 	# добавление линейных ограничений в качестве касательных к нелинейной функции цели в точке x
 	def add_obj_constraints(x, dvar_x, fx=None):
 		if fx is None:
@@ -445,7 +445,7 @@ def get_minlp_solution(
 		# Сначала генерим случайные точки и строим в них касательные к нелинейным объектам,
 		# чтобы лучше аппроксимировать нелинейные ограничения и функцию цели до начала решения MILP-задачи
 		if step_num <= random_points_count:
-			x_milp = generate_x()
+			x_milp = generate_x(opt_prob)
 			print("Random: " + str(x_milp))
 			# добавляем касательную к функции цели
 			if not opt_prob.objective.if_linear:
@@ -993,7 +993,8 @@ class mmaxgon_MINLP_POA:
 		NLP_refiner_object=None, 		# Объект класса с моделью NLP со всеми нелинейными ограничениями и с функцией цели для уточнения значений непрерывных переменных при фиксации целочисленных
 		NLP_projector_object=None,		# Объект класса с моделью NLP со всеми нелинейными ограничениями для проекции недопустимой точки на допустимую область для последующей построении касательной и линейного ограничения
 		lower_bound=None,               # Первичная оченка нижней границы решения
-		custom_constraints_list=[]      # Список выражений для дополнительных (не заданных в модели) ограничений для данного решения
+		custom_constraints_list=[],     # Список выражений для дополнительных (не заданных в модели) ограничений для данного решения
+		approximation_points=[]         # Список точек, в которых будем строиться линейная аппроксимация нелинейной функции целии и нелинейных ограничений до первого MILP-решения
 	):
 		# если функция нелинейных ограничений не задана, то ей становится функция-заглушка со значением -1 (т.е. всегда допустимо)
 		if non_lin_constr_fun == None:
@@ -1026,10 +1027,33 @@ class mmaxgon_MINLP_POA:
 			raise ValueError("Не определена функция цели!")
 		if MIP_model.if_objective_defined() and non_lin_obj_fun != None:
 			raise ValueError("Одновременно определены две функции цели!")
-
+		
+		# список всех переменных решений модели
+		xvars = decision_vars_to_vector_fun(MIP_model.get_mip_model())
+		
+		# строим линейные аппроксимации к нелинейной функции цели и нелинейным ограничениям,
+		# чтобы получать с самого начала адекватное MILP-решение
+		for x_random in approximation_points:
+			# Если функция цели нелинейная, то добавляем новую аппроксимацию функции цели в ограничения
+			if not MIP_model.if_objective_defined():
+				# fx - значение исходной целевой функции
+				fx = non_lin_obj_fun(x_random)
+				gradf = self.__get_linear_appr(non_lin_obj_fun, x_random)
+				xgradf = np.dot(x_random, gradf)
+				MIP_model.add_obj_constr(fx, gradf, xgradf, xvars)
+			
+			# Если есть нелинейные ограничения, то добавляем линейные ограничения в виде касательной к ним
+			if not (non_lin_constr_fun is None):
+				gx = np.array(non_lin_constr_fun(x_random))
+				gradg = self.__get_linear_appr_matrix(non_lin_constr_fun, x_random)
+				xgradg = np.matmul(gradg, x_random)
+				# добавляем новые аппроксимацию в ограничения
+				for k in range(len(gx)):
+					MIP_model.add_non_lin_constr(k, gx, gradg, xgradg, xvars)
+					
+		# MILP-итерации
 		while True:
 			iter_num += 1
-			
 			# Решаем MIP-задачу
 			results = MIP_model.solve()
 
@@ -1063,7 +1087,6 @@ class mmaxgon_MINLP_POA:
 			lower_bound = max(lower_bound, obj)
 
 			# переводим переменные решения в вектор
-			xvars = decision_vars_to_vector_fun(MIP_model.get_mip_model())
 			x = MIP_model.get_values(xvars)
 			print(x)
 
