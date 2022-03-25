@@ -4,7 +4,7 @@ import torch
 import copy
 import pickle
 ###################################################################
-x = torch.tensor(data=[0., 2., 2.], dtype=torch.float, requires_grad=True)
+x = torch.tensor(data=[0., 0., 0.], dtype=torch.float, requires_grad=True)
 print(x)
 
 def obj(x):
@@ -21,18 +21,19 @@ print(lin_cons_fun(x))
 
 penalty = 1e3
 def goal(x):
-	return obj(x) + penalty * (torch.matmul(torch.ones(2), torch.relu(non_lin_cons_fun(x))) + torch.abs(lin_cons_fun(x)))
+	return obj(x) + penalty * (torch.matmul(torch.ones(2), torch.relu(non_lin_cons_fun(x)))**2 + torch.abs(lin_cons_fun(x))**2)
 print(goal(x))
 
-opt = torch.optim.Adam([x])
+opt = torch.optim.Adam([x], lr=0.1)
 
 for i in range(int(1e3)):
 	val = goal(x)
-	print(val.data.item())
+	print("goal: {0}, objective: {1}".format(val.data.item(), obj(x)))
 	opt.zero_grad()
 	val.backward()
 	opt.step()
-	print(x.data)
+	print("data: {0}".format(x.data))
+	print("gradient: {0}".format(x.grad))
 
 ###################################################################
 # "теоретическая" функция зависимости объёма продаж от цены
