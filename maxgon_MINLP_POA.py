@@ -748,6 +748,114 @@ class ortools_cp_sat_MIP_model_wrapper:
 		return True
 
 ####################################################################################################
+# Обёртка описания задачи MIP в виде google ortools linear solver
+####################################################################################################
+class ortools_linear_solver_MIP_model_wrapper:
+	def __init__(
+		self,
+		milp_ortools_solver,                # Объект ortools.linear_solver.pywraplp.Solver.CreateSolver('SCIP')
+		if_objective_defined=False          # Задана ли цель в задаче
+	):
+		self.__milp_ortools_solver = milp_ortools_solver # copy.deepcopy не работает!
+
+		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
+		self.__non_lin_cons = []
+		# ограничения на функцию цели (линейная аппроксимация после каждой успешной итерации)
+		self.__obj_cons = []
+		# пользовательские ограничения (для разбиения допустимого множества)
+		self.__custom_cons = []
+
+		"""
+		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
+		Если функции цели в pyomo_MILP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
+		В этом случае мы будем минимизировать её линейные аппроксимации.
+		"""
+		self.__if_objective_defined = if_objective_defined
+
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__milp_ortools_solver.NumVar(-self.__milp_ortools_solver.infinity(), self.__milp_ortools_solver.infinity(), "mu")
+			# Добавляем временное ограничение на цель
+			self.__temp_mu = self.__milp_ortools_solver.Add(self.__mu >= -1e9)
+			# Добавляем цель
+			self.__milp_ortools_solver.Minimize(self.__mu)
+		else:
+			self.__temp_mu = None
+
+	# возвращаем модель
+	def get_mip_model(self):
+		return self.__milp_ortools_solver
+
+	# возвращаем число аппроксимаций функции цели
+	def get_object_cuts_num(self):
+		return len(self.__obj_cons)
+
+	# возвращаем число аппроксимаций нелинейных ограничений
+	def get_non_lin_constr_cuts_num(self):
+		return len(self.__non_lin_cons)
+
+	# удаляем временные ограничения
+	def del_temp_constr(self):
+		# if (not self.__if_objective_defined) and (not (self.__temp_mu is None)):
+		# 	self.__milp_ortools_solver.constraints().remove(self.__temp_mu)
+		# 	self.__temp_mu = None
+		# 	print("Удаляем временное ограничение.")
+		# 	return True
+		return False
+
+	# задана ли функция цели в pyomo
+	def if_objective_defined(self):
+		return self.__if_objective_defined
+
+	# значение целевой функции
+	def get_objective_value(self):
+		return self.__milp_ortools_solver.Objective().Value()
+
+	# значения переменных решения
+	def get_values(self, xvars):
+		return [x.SolutionValue() for x in xvars]
+
+	# очищаем аппроксимационные ограничения
+	def clear(self):
+		# for cons in self.__non_lin_cons:
+		# 	self.__milp_ortools_solver.constraints().remove(cons)
+		# for cons in self.__obj_cons:
+		# 	self.__milp_ortools_solver.constraints().remove(cons)
+		# for cons in self.__custom_cons:
+		# 	self.__milp_ortools_solver.constraints().remove(cons)
+		# self.__non_lin_cons.clear()
+		# self.__obj_cons.clear()
+		# self.__custom_cons.clear()
+		return False
+
+	# добавляем линеаризованные ограничения на функцию цели
+	def add_obj_constr(self, fx, gradf, xgradf, xvars):
+		expr = fx - \
+			xgradf + \
+			sum(xvars[i] * gradf[i] for i in range(len(xvars))) <= self.__mu
+		new_constr = self.__milp_ortools_solver.Add(expr)
+		self.__obj_cons.append(new_constr)
+
+	# добавляем лианеризованные ограничения на нарушенные ограничения
+	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
+		expr = gx_violated[k] - \
+			xgradg_violated[k] + \
+			sum(xvars[i] * gradg_violated[k][i] for i in range(len(xvars))) <= 0
+		new_constr = self.__milp_ortools_solver.Add(expr)
+		self.__non_lin_cons.append(new_constr)
+
+	# добавляем пользовательские ограничения
+	def add_custom_constr(self, expr):
+		new_constr = self.__milp_ortools_solver.Add(expr)
+		self.__custom_cons.append(new_constr)
+
+	def solve(self):
+		results = self.__milp_ortools_solver.Solve()
+		if results == self.__milp_ortools_solver.INFEASIBLE:
+			return False
+		return True
+	
+####################################################################################################
 # Обёртка описания задачи MIP в виде CPLEX MP или CP
 ####################################################################################################
 class cplex_MIP_model_wrapper:
@@ -866,7 +974,7 @@ class cplex_MIP_model_wrapper:
 		return True
 
 ####################################################################################################
-# Обёртка описания задачи MIP в виде GEKKO -- ПОХОЖЕ НЕ РАБОТАЕТ
+# Обёртка описания задачи MIP в виде GEKKO
 ####################################################################################################
 class gekko_MIP_model_wrapper:
 	def __init__(

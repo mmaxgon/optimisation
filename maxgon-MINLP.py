@@ -12,10 +12,15 @@ import numpy as np
 import scipy.optimize as opt
 
 import pyomo.environ as pyomo
+
 import ortools.sat.python.cp_model as ortools_cp_model
+from ortools.linear_solver import pywraplp as ortools_linear_solver
+
 import docplex.mp.model as docplex_mp_model
 import docplex.cp.model as docplex_cp_model
+
 from gekko import GEKKO
+
 import rbfopt
 ###############################################################################
 '''
@@ -175,13 +180,13 @@ model_minlp.nlc2 = pyomo.Constraint(expr = model_minlp.x[1]**2 + model_minlp.x[2
 model_minlp.obj = pyomo.Objective(expr = -(1000 - model_minlp.y[0]**2 - 2*model_minlp.x[1]**2 - model_minlp.x[2]**2 - model_minlp.y[0]*model_minlp.x[1] - model_minlp.y[0]*model_minlp.x[2]), sense=pyomo.minimize)
 
 # start = time()
-# pyomo.SolverFactory("cplex").solve(model_minlp, warmstart=True)
+# # pyomo.SolverFactory("cplex").solve(model_minlp, warmstart=True)
 # pyomo.SolverFactory("couenne").solve(model_minlp)
 # print(time() - start)
-# [model_minlp.y[0](), model_minlp.x[1](), model_minlp.x[1]()]
+# print([model_minlp.y[0](), model_minlp.x[1](), model_minlp.x[1]()])
 
 ##############################################################################
-# Задача как MILP CP-SAT
+# Задача как MILP google ortools CP-SAT
 ##############################################################################
 model_milp_cpsat = ortools_cp_model.CpModel()
 
@@ -196,6 +201,70 @@ model_milp_cpsat_lin_cons = model_milp_cpsat.Add(8 * model_milp_cpsat_x[0] + 14 
 # status = model_milp_cpsat_solver.Solve(model_milp_cpsat)
 # model_milp_cpsat_solver.StatusName()
 # list(map(model_milp_cpsat_solver.Value, [model_milp_cpsat_x[0], model_milp_cpsat_x[1], model_milp_cpsat_x[1]]))
+
+##############################################################################
+# Задача как MINLP google ortools CP-SAT
+##############################################################################
+model_minlp_cpsat = ortools_cp_model.CpModel()
+
+# Переменные решения (все целочисленные)
+model_minlp_cpsat.x = [model_minlp_cpsat.NewIntVar(0, 10, "x[{}]".format(i)) for i in range(3)]
+
+# Линейные ограничения
+model_minlp_cpsat.lin_cons = model_minlp_cpsat.Add(8 * model_milp_cpsat_x[0] + 14 * model_milp_cpsat_x[1] + 7 * model_milp_cpsat_x[2] - 56 == 0)
+
+# нелинейные ограничения
+model_minlp_cpsat.z00 = model_minlp_cpsat.NewIntVar(0, 100, "z00")
+model_minlp_cpsat.AddMultiplicationEquality(model_minlp_cpsat.z00, [model_minlp_cpsat.x[0], model_minlp_cpsat.x[0]])
+model_minlp_cpsat.z11 = model_minlp_cpsat.NewIntVar(0, 100, "z11")
+model_minlp_cpsat.AddMultiplicationEquality(model_minlp_cpsat.z11, [model_minlp_cpsat.x[1], model_minlp_cpsat.x[1]])
+model_minlp_cpsat.z22 = model_minlp_cpsat.NewIntVar(0, 100, "z22")
+model_minlp_cpsat.AddMultiplicationEquality(model_minlp_cpsat.z22, [model_minlp_cpsat.x[2], model_minlp_cpsat.x[2]])
+model_minlp_cpsat.z01 = model_minlp_cpsat.NewIntVar(0, 100, "z01")
+model_minlp_cpsat.AddMultiplicationEquality(model_minlp_cpsat.z01, [model_minlp_cpsat.x[0], model_minlp_cpsat.x[1]])
+model_minlp_cpsat.z02 = model_minlp_cpsat.NewIntVar(0, 100, "z02")
+model_minlp_cpsat.AddMultiplicationEquality(model_minlp_cpsat.z02, [model_minlp_cpsat.x[0], model_minlp_cpsat.x[2]])
+
+model_minlp_cpsat.nlc1 = model_minlp_cpsat.Add(model_minlp_cpsat.z00 + model_minlp_cpsat.z11 + model_minlp_cpsat.z22 <= 25)
+model_minlp_cpsat.nlc2 = model_minlp_cpsat.Add(model_minlp_cpsat.z11 + model_minlp_cpsat.z22 <= 13)
+# нелинейная цель
+model_minlp_cpsat.Minimize(-(1000 - model_minlp_cpsat.z00 - 2*model_minlp_cpsat.z11 - model_minlp_cpsat.z22 - model_minlp_cpsat.z01 - model_minlp_cpsat.z02))
+
+# model_minlp_cpsat.solver = ortools_cp_model.CpSolver()
+# model_minlp_cpsat.solver.parameters.max_time_in_seconds = 60.0
+# status = model_minlp_cpsat.solver.Solve(model_minlp_cpsat)
+# print(model_minlp_cpsat.solver.StatusName())
+# print(list(map(model_minlp_cpsat.solver.Value, [model_minlp_cpsat.x[0], model_minlp_cpsat.x[1], model_minlp_cpsat.x[2]])))
+# print(model_minlp_cpsat.solver.ObjectiveValue())
+
+##############################################################################
+# Задача как MILP google ortools linear model
+##############################################################################
+# from ortools.linear_solver import pywraplp as ortools_linear_solver
+model_milp_ortools_solver = ortools_linear_solver.Solver.CreateSolver('SCIP')
+
+# Целочисленная переменная решения
+model_milp_ortools_solver.y = [model_milp_ortools_solver.NumVar(0.0, 10.0, 'y')]
+# Непрерывные переменные решения
+model_milp_ortools_solver.x = [model_milp_ortools_solver.IntVar(0, 10, "x[{}]".format(i)) for i in range(2)]
+
+# Линейные ограничения
+model_milp_ortools_solver.lin_cons = model_milp_ortools_solver.Add(8 * model_milp_ortools_solver.y[0] + 14 * model_milp_ortools_solver.x[0] + 7 * model_milp_ortools_solver.x[1] - 56 == 0)
+
+# # нелинейные ограничения
+# model_milp_ortools_solver.nlc1 = model_milp_ortools_solver.Add(model_milp_ortools_solver.y[0]**2 + model_milp_ortools_solver.x[0]**2 + model_milp_ortools_solver.x[1]**2 <= 25)
+# model_milp_ortools_solver.nlc2 = model_milp_ortools_solver.Add(model_milp_ortools_solver.x[0]**2 + model_milp_ortools_solver.x[1]**2 <= 12)
+# # нелинейная цель
+# model_milp_ortools_solver.Minimize(-(1000 - model_milp_ortools_solver.y[0]**2 - 2*model_milp_ortools_solver.x[0]**2 - model_milp_ortools_solver.x[1]**2 - model_milp_ortools_solver.y[0]*model_milp_ortools_solver.x[0] - model_milp_ortools_solver.y[0]*model_milp_ortools_solver.x[1]))
+
+# model_milp_ortools_solver.Minimize(0)
+# status = model_milp_ortools_solver.Solve()
+# if status == model_milp_ortools_solver.OPTIMAL:
+# 	print('Solution:')
+# 	print('Objective value =', model_milp_ortools_solver.Objective().Value())
+# 	print(model_milp_ortools_solver.y[0].solution_value(), model_milp_ortools_solver.x[0].solution_value(), model_milp_ortools_solver.x[1].solution_value())
+# else:
+# 	print('The problem does not have an optimal solution.')
 
 ##############################################################################
 # Задача как CPLEX MP MILP
@@ -255,7 +324,7 @@ model_cplex_cp_lin_cons = model_cplex_cp.add(8 * model_cplex_cp.y[0] + 14 * mode
 # sol = model_cplex_cp.solve()
 # DV_2_vec_gekko(model_cplex_cp)
 # [sol[v.name] for v in DV_2_vec_gekko(model_cplex_cp)]
-# (sol["y_0"], sol["x_0"], sol["x_1"])
+# print((sol["y_0"], sol["x_0"], sol["x_1"]))
 
 ##############################################################################
 # Задача как CPLEX CP MINLP
@@ -279,10 +348,11 @@ model_cplex_minlp_cp.minimize(-(1000 - model_cplex_minlp_cp.y[0]**2 - 2*model_cp
 # sol = model_cplex_minlp_cp.solve()
 # DV_2_vec_gekko(model_cplex_minlp_cp)
 # [sol[v.name] for v in DV_2_vec_gekko(model_cplex_minlp_cp)]
-# (sol["y_0"], sol["x_0"], sol["x_1"])
+# print((sol["y_0"], sol["x_0"], sol["x_1"]))
+# print(sol.get_objective_value())
 
 ##############################################################################
-# Задача как GEKKO MILP - ПОХОЖЕ НЕ РАБОТАЕТ
+# Задача как GEKKO MILP
 ##############################################################################
 model_gekko = GEKKO(remote = False) # Initialize gekko
 model_gekko.options.SOLVER = 1  # APOPT is an MINLP solver
@@ -299,9 +369,9 @@ model_gekko.solver_options = [
 	# 1 = depth first, 2 = breadth first
 	'minlp_branch_method 1', \
 	# maximum deviation from whole number
-	'minlp_integer_tol 0.001', \
+	'minlp_integer_tol 0.0001', \
 	# covergence tolerance
-	'minlp_gap_tol 0.001'
+	'minlp_gap_tol 0.0001'
 ]
 
 # Переменные решения (непрерывные)
@@ -322,7 +392,7 @@ model_gekko.Equation(8 * model_gekko.y[0] + 14 * model_gekko.x[0] + 7 * model_ge
 # print('Objective: ' + str(model_gekko.options.objfcnval))
 
 ##############################################################################
-# Задача как GEKKO MINLP - ПОХОЖЕ НЕ РАБОТАЕТ
+# Задача как GEKKO MINLP
 ##############################################################################
 model_gekko_minlp = GEKKO(remote = False) # Initialize gekko
 model_gekko_minlp.options.SOLVER = 1  # APOPT is an MINLP solver
@@ -356,9 +426,7 @@ model_gekko_minlp.nlc2 = model_gekko_minlp.Equation(model_gekko_minlp.x[0]**2 + 
 model_gekko_minlp.Obj(-(1000 - model_gekko_minlp.y[0]**2 - 2*model_gekko_minlp.x[0]**2 - model_gekko_minlp.x[1]**2 - model_gekko_minlp.y[0]*model_gekko_minlp.x[0] - model_gekko_minlp.y[0]*model_gekko_minlp.x[1]))
 
 # model_gekko_minlp.solve(disp=True)
-# print(model_gekko_minlp.y[0].value)
-# print(model_gekko_minlp.x[0].value)
-# print(model_gekko_minlp.x[1].value)
+# print(model_gekko_minlp.y[0].value, model_gekko_minlp.x[0].value, model_gekko_minlp.x[1].value)
 # print(model_gekko_minlp.options.SOLVESTATUS)
 # print('Objective: ' + str(model_gekko_minlp.options.objfcnval))
 
@@ -570,7 +638,6 @@ print(res)
 ###############################################################################
 # ortools cp_sat Нелинейная функция цели, есть нелинейные ограничения
 ###############################################################################
-
 ortools_cp_sat_mip_model_wrapper = mg_minlp.ortools_cp_sat_MIP_model_wrapper(
 	ortools_cp_model=ortools_cp_model,
 	model_milp_cpsat=model_milp_cpsat,
@@ -604,6 +671,53 @@ res = poa.solve(
 	tolerance=1e-1,
 	add_constr="ALL",
 	NLP_projector_object=scipy_projector_optimizer_obj
+)
+print(time() - start_time)
+print(res)
+
+ortools_cp_sat_minlp_model_wrapper = mg_minlp.ortools_cp_sat_MIP_model_wrapper(
+	ortools_cp_model=ortools_cp_model,
+	model_milp_cpsat=model_minlp_cpsat,
+	BIG_MULT=1e6
+)
+start_time = time()
+res = poa.solve(
+	MIP_model=ortools_cp_sat_minlp_model_wrapper,
+	non_lin_obj_fun=None,
+	non_lin_constr_fun=None,
+	decision_vars_to_vector_fun=DV_2_vec_cp_sat,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_projector_object=scipy_projector_optimizer_obj
+)
+print(time() - start_time)
+print(res)
+
+###############################################################################
+# ortools linear solver Нелинейная функция цели, есть нелинейные ограничения
+###############################################################################
+# Ещё раз задача т.к. она перезаписывается: copy.deepcopy на работает с объектом ortools.linear_solver.pywraplp.Solver.CreateSolver('SCIP')
+model_milp_ortools_solver = ortools_linear_solver.Solver.CreateSolver('SCIP')
+model_milp_ortools_solver.y = [model_milp_ortools_solver.NumVar(0.0, 10.0, 'y')]
+model_milp_ortools_solver.x = [model_milp_ortools_solver.IntVar(0, 10, "x[{}]".format(i)) for i in range(2)]
+model_milp_ortools_solver.lin_cons = model_milp_ortools_solver.Add(8 * model_milp_ortools_solver.y[0] + 14 * model_milp_ortools_solver.x[0] + 7 * model_milp_ortools_solver.x[1] - 56 == 0)
+
+ortools_linear_mip_model_wrapper = mg_minlp.ortools_linear_solver_MIP_model_wrapper(
+	milp_ortools_solver=model_milp_ortools_solver,
+	if_objective_defined=False
+)
+model_ortools_lin = ortools_linear_mip_model_wrapper.get_mip_model()
+start_time = time()
+res = poa.solve(
+	MIP_model=ortools_linear_mip_model_wrapper,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	NLP_projector_object=scipy_projector_optimizer_obj
+	# ,custom_constraints_list=[model_ortools_lin.x[0] >= 1, model_ortools_lin.x[0] <= 2]
+	# ,approximation_points=approximation_points
 )
 print(time() - start_time)
 print(res)
