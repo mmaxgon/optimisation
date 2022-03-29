@@ -40,8 +40,11 @@ scip_model.optimize()
 sol = scip_model.getBestSol()
 
 # решение
-print(scip_model.getObjVal())
-print([sol[scip_model_y[0]], sol[scip_model_x[0]], sol[scip_model_x[1]]])
-
-
-
+if scip_model.getStatus() != "infeasible":
+	print(scip_model.getObjVal())
+	print([sol[scip_model_y[0]], sol[scip_model_x[0]], sol[scip_model_x[1]]])
+else:
+	print("No solution found")
+	
+scip_model.getStage()
+# scip_model.freeTransform()
