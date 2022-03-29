@@ -21,6 +21,7 @@ git remote add origin https://mmaxgon_bitbucket@bitbucket.org/mmaxgon_bitbucket/
 git pull https://mmaxgon_bitbucket@bitbucket.org/mmaxgon_bitbucket/optimisation.git master
 git status
 
+git add git.txt
 git add MIP.py
 git add ipopt.py
 git add scipy-opt.py
@@ -29,13 +30,13 @@ git add rbfopt.py
 git add google-or.py
 git add MINLP-compare.py
 git add gekko-MINL.py
-git add maxgon-MINLP_old.py
 git add maxgon-MINLP-BB.py
 git add schedule-cpsat.py
 git add schedule-cplex.py
 git add autograd.py
 git add pyomo-opt.py
 git add torch-opt.py
+git add scip-opt.py
 git add maxgon-MINLP.py
 git add maxgon_MINLP_POA.py
 

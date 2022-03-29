@@ -698,8 +698,8 @@ print(res)
 ###############################################################################
 # Ещё раз задача т.к. она перезаписывается: copy.deepcopy на работает с объектом ortools.linear_solver.pywraplp.Solver.CreateSolver('SCIP')
 model_milp_ortools_solver = ortools_linear_solver.Solver.CreateSolver('SCIP')
-model_milp_ortools_solver = ortools_linear_solver.Solver.CreateSolver('CBC')
-model_milp_ortools_solver = ortools_linear_solver.Solver.CreateSolver('CLP')
+# model_milp_ortools_solver = ortools_linear_solver.Solver.CreateSolver('CBC')
+# model_milp_ortools_solver = ortools_linear_solver.Solver.CreateSolver('CLP')
 
 model_milp_ortools_solver.y = [model_milp_ortools_solver.NumVar(0.0, 10.0, 'y')]
 model_milp_ortools_solver.x = [model_milp_ortools_solver.IntVar(0, 10, "x[{}]".format(i)) for i in range(2)]
