@@ -156,7 +156,9 @@ class scipy_projector_optimizer:
 2. Находим переменную, самую близкую к целочисленной (из тех, что должны быть целочисленными)
 3. Округляем её и фиксируем значение
 4. Находим новое NLP-решение 
-5. GOTO 2.
+5. Если решение найдено: GOTO 2.
+6. Если решение не найдено: округляем в другую сторону и решаем NLP. Если решение найдено: GOTO 2.
+7. Если в обе стороны округления решение не найдено, идём по ветке вверх и меняем сторону округления там.
 """
 def get_feasible_solution1(opt_prob, x_nlp):
 	constraints = [
@@ -171,44 +173,124 @@ def get_feasible_solution1(opt_prob, x_nlp):
 			opt_prob.nonlinear_constraints.bounds.ub
 		)
 	]
-	init_bounds_lb = np.array(opt_prob.dvars.bounds.lb)
-	init_bounds_ub = np.array(opt_prob.dvars.bounds.ub)
+	bounds_lb = np.array(opt_prob.dvars.bounds.lb)
+	bounds_ub = np.array(opt_prob.dvars.bounds.ub)
 	ix_int = copy.copy(opt_prob.dvars.ix_int)
 	x_nlp = np.array(x_nlp)
 
-	while True:
+	def build_int_solution_tree(x_nlp, ix_int, bounds_lb, bounds_ub):
 		# значения переменных решения, которые должны быть целочисленными
 		x_int = x_nlp[ix_int]
 		# Отклонение значений от целочисленных
-		x_dist_int = np.amin([np.ceil(x_int) - x_int, x_int - np.floor(x_int)], axis=0)
-		# Берём минимальное
-		ix = np.argmin(x_dist_int)
+		x_dist_int = np.array([[np.ceil(x) - x, x - np.floor(x)] for x in x_int])
+		# индекс мимнального значения
+		ix_min = np.argmin(x_dist_int)
+		# индекс соответствующей переменной
+		ix_int_var = ix_min // 2
+		# индекс округления (0 ceil, 1 floor)
+		ix_int_var_dir = ix_min % 2
 		# округляем
-		round_val = np.round(x_nlp[ix_int][ix])
-		# Фиксируем значение этой переменной
-		init_bounds_lb[ix_int[ix]] = round_val
-		init_bounds_ub[ix_int[ix]] = round_val
+		x_val = x_int[ix_int_var]
+		round_val = np.ceil(x_val) if ix_int_var_dir == 0 else np.floor(x_val)
+		# формируем новые границы
+		new_bounds_lb = np.array(bounds_lb)
+		new_bounds_lb[ix_int[ix_int_var]] = round_val
+		new_bounds_ub = np.array(bounds_ub)
+		new_bounds_ub[ix_int[ix_int_var]] = round_val
 		# Получаем новое NLP-решение
 		res = opt.minimize(
 			fun=opt_prob.objective.fun,
-			bounds=opt.Bounds(init_bounds_lb, init_bounds_ub),
+			bounds=opt.Bounds(new_bounds_lb, new_bounds_ub),
 			constraints=constraints,
 			x0=x_nlp,
 			method="trust-constr",
 			options={'verbose': 0, "maxiter": 200}
 		)
-		if (not res.success) or (res.constr_violation > 1e-6):
-			raise ValueError("Feasible solution not found!")
-
-		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
-		print(res)
-		# не осталось больше целочисленных компонент, которые мы ещё не зафикисировали
-		if len(ix_int) <= 1:
+		# Если допустимое решение нашли
+		if res.success and (res.constr_violation <= 1e-6):
+			res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+			print(res)
+			# если не осталось больше целочисленных компонент, которые мы ещё не зафиксировали - задача решена
+			if len(ix_int) <= 1:
+				return res
+			# если есть ещё целочисленные нефиксированные компоненты - формируем новую рекурсивную задачу
+			new_x_nlp = res["x"]
+			# удаляем из списка индексов целочисленных переменных фиксированную на этом шаге
+			new_ix_int = np.delete(ix_int, ix_int_var)
+			# решаем задачу дальше
+			res = build_int_solution_tree(new_x_nlp, new_ix_int, new_bounds_lb, new_bounds_ub)
+			# если внизу решение нашли - возвращаем его
+			if not (res is None):
+				return res
+			# Если внизу решение не было найдено - меняем сторону округления на том шаге и снова идём вниз
+			round_val = np.ceil(x_val) if ix_int_var_dir == 1 else np.floor(x_val)
+			# формируем новые границы
+			new_bounds_lb = np.array(bounds_lb)
+			new_bounds_lb[ix_int[ix_int_var]] = round_val
+			new_bounds_ub = np.array(bounds_ub)
+			new_bounds_ub[ix_int[ix_int_var]] = round_val
+			# Получаем новое NLP-решение
+			res = opt.minimize(
+				fun=opt_prob.objective.fun,
+				bounds=opt.Bounds(new_bounds_lb, new_bounds_ub),
+				constraints=constraints,
+				x0=x_nlp,
+				method="trust-constr",
+				options={'verbose': 0, "maxiter": 200}
+			)
+			# если допустимое решение не найдено - идём наверх с пустым
+			if not (res.success and (res.constr_violation <= 1e-6)):
+				return None
+			# если допустимое решение найдено
+			res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+			print(res)
+			# если не осталось больше целочисленных компонент, которые мы ещё не зафиксировали - задача решена
+			if len(ix_int) <= 1:
+				return res
+			# если есть ещё целочисленные нефиксированные компоненты - формируем новую рекурсивную задачу
+			new_x_nlp = res["x"]
+			# удаляем из списка индексов целочисленных переменных фиксированную на этом шаге
+			new_ix_int = np.delete(ix_int, ix_int_var)
+			# решаем задачу дальше
+			res = build_int_solution_tree(new_x_nlp, new_ix_int, new_bounds_lb, new_bounds_ub)
+			# при любом решении внизу - возвращаем его наверх, так как все варианты уже испробовали
 			return res
-		x_nlp = res["x"]
-		# удаляем из целочисленных индексов уже зафиксированный
-		ix_int = np.delete(ix_int, ix)
-
+		else:
+			# Если решение не было найдено - меняем сторону округления на этом шаге и снова решаем
+			round_val = np.ceil(x_val) if ix_int_var_dir == 1 else np.floor(x_val)
+			# формируем новые границы
+			new_bounds_lb = np.array(bounds_lb)
+			new_bounds_lb[ix_int[ix_int_var]] = round_val
+			new_bounds_ub = np.array(bounds_ub)
+			new_bounds_ub[ix_int[ix_int_var]] = round_val
+			# Получаем новое NLP-решение
+			res = opt.minimize(
+				fun=opt_prob.objective.fun,
+				bounds=opt.Bounds(new_bounds_lb, new_bounds_ub),
+				constraints=constraints,
+				x0=x_nlp,
+				method="trust-constr",
+				options={'verbose': 0, "maxiter": 200}
+			)
+			# если допустимое решение не найдено - идём наверх с пустым
+			if not (res.success and (res.constr_violation <= 1e-6)):
+				return None
+			# если допустимое решение найдено
+			res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+			print(res)
+			# если не осталось больше целочисленных компонент, которые мы ещё не зафиксировали - задача решена
+			if len(ix_int) <= 1:
+				return res
+			# если есть ещё целочисленные нефиксированные компоненты - формируем новую рекурсивную задачу
+			new_x_nlp = res["x"]
+			# удаляем из списка индексов целочисленных переменных фиксированную на этом шаге
+			new_ix_int = np.delete(ix_int, ix_int_var)
+			# решаем задачу дальше
+			res = build_int_solution_tree(new_x_nlp, new_ix_int, new_bounds_lb, new_bounds_ub)
+			# при любом решении внизу - возвращаем его наверх, так как все варианты уже испробовали
+			return res
+		
+	return build_int_solution_tree(x_nlp, ix_int, bounds_lb, bounds_ub)
 
 """
 Последовательное приближение друг к другу NLP и MILP решений.

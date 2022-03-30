@@ -127,7 +127,7 @@ scipy_projector_optimizer_obj = mg_minlp.scipy_projector_optimizer(opt_prob)
 ####################################################################################################
 # Получение допустимого решения как приближения непрерывного
 ####################################################################################################
-# init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"])
+init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"])
 init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076, 2.48721229])
 init_feasible2 = mg_minlp.get_feasible_solution2(opt_prob, res_NLP["x"])
 
