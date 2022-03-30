@@ -53,8 +53,8 @@ decision_vars = mg_minlp.dvars(3, [1, 2], [0], mg_minlp.bounds([0, 0, 0], [10, 1
 def obj(x):
 	return -(1000 - x[0]**2 - 2*x[1]**2 - x[2]**2 - x[0]*x[1] - x[0]*x[2])
 	# return 2*x[0] + 3*x[1] + 4*x[2]
-# objective_fun = mg_minlp.objective(3, True, obj)
-objective_fun = mg_minlp.objective(3, False, obj)
+objective_fun = mg_minlp.objective(3, False, obj, None)
+objective_lin_fun = mg_minlp.objective(3, True, None, [2, 3, 4])
 
 # Нелинейные ограничения
 def non_lin_cons_fun(x):
@@ -91,6 +91,7 @@ lin_cons = mg_minlp.linear_constraints(
 
 opt_prob = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons)
 opt_prob_cp = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons_cp)
+opt_prob_lin = mg_minlp.optimization_problem(decision_vars, objective_lin_fun, lin_cons, None)
 
 ####################################################################################################
 # Получение решения из описания opt_prob
@@ -104,11 +105,12 @@ print(sol)
 # Получение нижней границы решения
 ####################################################################################################
 # Нижняя граница как решение NLP-задачи
-res_NLP = mg_minlp.get_NLP_lower_bound(opt_prob)
+res_LP = mg_minlp.get_relaxed_solution(opt_prob_lin)
+res_NLP = mg_minlp.get_relaxed_solution(opt_prob)
 print(res_NLP)
 nlp_lower_bound = res_NLP["obj"]
 
-# mg_minlp.get_NLP_lower_bound(opt_prob, custom_linear_constraints=mg_minlp.linear_constraints(1, [[1,0,0]], mg_minlp.bounds([3], [4])))
+# mg_minlp.get_relaxed_solution(opt_prob, custom_linear_constraints=mg_minlp.linear_constraints(1, [[1,0,0]], mg_minlp.bounds([3], [4])))
 
 ####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
@@ -1071,7 +1073,7 @@ model = pyomo_mip_model_wrapper.get_mip_model()
 solution = {}
 def obj_funct(t):
 	# Сначала получаем нижнюю границу решения как решение NLP
-	res_nlp = mg_minlp.get_NLP_lower_bound(
+	res_nlp = mg_minlp.get_relaxed_solution(
 		opt_prob,
 		custom_linear_constraints=mg_minlp.linear_constraints(1, [[1, 0, 0]], mg_minlp.bounds([t[0]], [t[0] + 1 - 1e-6]))
 	)

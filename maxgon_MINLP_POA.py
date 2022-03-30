@@ -20,7 +20,7 @@ bounds = namedtuple("bounds", ["lb", "ub"])
 # Переменные решения
 dvars = namedtuple("dvars", ["n", "ix_int", "ix_cont", "bounds", "x0"])
 # Цель
-objective = namedtuple("objective", ["n", "if_linear", "fun"])
+objective = namedtuple("objective", ["n", "if_linear", "fun", "lin_coeffs"])
 # Линейные ограничения
 linear_constraints = namedtuple("linear_constraints", ["m", "A", "bounds"])
 # Нелинейные ограничения
@@ -32,7 +32,37 @@ optimization_problem = namedtuple("optimization_problem", ["dvars", "objective",
 # Получение нижней границы решения
 ####################################################################################################
 
-def get_NLP_lower_bound(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
+def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
+	if opt_prob.objective.if_linear and (opt_prob.nonlinear_constraints is None):
+		# линейная задача
+		ix_ub = np.where(opt_prob.linear_constraints.bounds.lb < opt_prob.linear_constraints.bounds.ub)[0]
+		if len(ix_ub) == 0:
+			A_ub = None
+			b_ub = None
+		else:
+			A_ub = np.array(opt_prob.linear_constraints.A)[ix_ub]
+			b_ub = np.array(opt_prob.linear_constraints.bounds.ub)[ix_ub]
+			
+		ix_eq = np.where(opt_prob.linear_constraints.bounds.lb == opt_prob.linear_constraints.bounds.ub)[0]
+		if len(ix_eq) == 0:
+			A_eq = None
+			b_eq = None
+		else:
+			A_eq = np.array(opt_prob.linear_constraints.A)[ix_eq]
+			b_eq = np.array(opt_prob.linear_constraints.bounds.ub)[ix_eq]
+		
+		bounds = []
+		for i in range(len(opt_prob.dvars.bounds.lb)):
+			bounds.append((opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]))
+
+		c = opt_prob.objective.lin_coeffs
+		
+		res = opt.linprog(c, A_ub, b_ub, A_eq, b_eq, bounds, method='simplex', callback=None, options=None, x0=opt_prob.dvars.x0)
+		print(res)
+		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": np.max(np.abs(res.con))}
+		return res
+	
+	# нелинейная задача
 	constraints = [
 		opt.LinearConstraint(
 			opt_prob.linear_constraints.A,
@@ -199,7 +229,7 @@ def get_feasible_solution1(opt_prob, x_nlp):
 			opt_prob.nonlinear_constraints
 		)
 		# Получаем новое NLP-решение
-		res = get_NLP_lower_bound(new_opt_prob)
+		res = get_relaxed_solution(new_opt_prob)
 		# Если допустимое решение нашли
 		if res["success"] and (res["constr_violation"] <= 1e-6):
 			print(res)
@@ -236,7 +266,7 @@ def get_feasible_solution1(opt_prob, x_nlp):
 				opt_prob.nonlinear_constraints
 			)
 			# Получаем новое NLP-решение
-			res = get_NLP_lower_bound(new_opt_prob)
+			res = get_relaxed_solution(new_opt_prob)
 			# если допустимое решение не найдено - идём наверх с пустым
 			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
 				return None
@@ -275,7 +305,7 @@ def get_feasible_solution1(opt_prob, x_nlp):
 				opt_prob.nonlinear_constraints
 			)
 			# Получаем новое NLP-решение
-			res = get_NLP_lower_bound(new_opt_prob)
+			res = get_relaxed_solution(new_opt_prob)
 			# если допустимое решение не найдено - идём наверх с пустым
 			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
 				return None
@@ -447,7 +477,7 @@ def get_minlp_solution(
 	
 	# Рассчитываем решение NLP-задачи для получения нижней границы
 	if if_nlp_lower_bound:
-		res_NLP = get_NLP_lower_bound(opt_prob)
+		res_NLP = get_relaxed_solution(opt_prob)
 		if not (res_NLP["success"] and res_NLP["constr_violation"] <= 1e-6):
 			raise ValueError("Нет NLP-решения!")
 		nlp_lower_bound = res_NLP["obj"]
