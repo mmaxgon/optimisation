@@ -161,18 +161,6 @@ class scipy_projector_optimizer:
 7. Если в обе стороны округления решение не найдено, идём по ветке вверх и меняем сторону округления там.
 """
 def get_feasible_solution1(opt_prob, x_nlp):
-	constraints = [
-		opt.LinearConstraint(
-			opt_prob.linear_constraints.A,
-			opt_prob.linear_constraints.bounds.lb,
-			opt_prob.linear_constraints.bounds.ub
-		),
-		opt.NonlinearConstraint(
-			opt_prob.nonlinear_constraints.fun,
-			opt_prob.nonlinear_constraints.bounds.lb,
-			opt_prob.nonlinear_constraints.bounds.ub
-		)
-	]
 	bounds_lb = np.array(opt_prob.dvars.bounds.lb)
 	bounds_ub = np.array(opt_prob.dvars.bounds.ub)
 	ix_int = copy.copy(opt_prob.dvars.ix_int)
@@ -197,18 +185,23 @@ def get_feasible_solution1(opt_prob, x_nlp):
 		new_bounds_lb[ix_int[ix_int_var]] = round_val
 		new_bounds_ub = np.array(bounds_ub)
 		new_bounds_ub[ix_int[ix_int_var]] = round_val
-		# Получаем новое NLP-решение
-		res = opt.minimize(
-			fun=opt_prob.objective.fun,
-			bounds=opt.Bounds(new_bounds_lb, new_bounds_ub),
-			constraints=constraints,
-			x0=x_nlp,
-			method="trust-constr",
-			options={'verbose': 0, "maxiter": 200}
+		# получаем новую NLP задачу с фиксированными значениями round_val для целочисленной переменной ix_int_var
+		new_opt_prob = optimization_problem(
+			dvars(
+				opt_prob.dvars.n,
+				opt_prob.dvars.ix_int,
+				opt_prob.dvars.ix_cont,
+				bounds(new_bounds_lb, new_bounds_ub),
+				x_nlp
+			),
+			opt_prob.objective,
+			opt_prob.linear_constraints,
+			opt_prob.nonlinear_constraints
 		)
+		# Получаем новое NLP-решение
+		res = get_NLP_lower_bound(new_opt_prob)
 		# Если допустимое решение нашли
-		if res.success and (res.constr_violation <= 1e-6):
-			res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+		if res["success"] and (res["constr_violation"] <= 1e-6):
 			print(res)
 			# если не осталось больше целочисленных компонент, которые мы ещё не зафиксировали - задача решена
 			if len(ix_int) <= 1:
@@ -229,20 +222,25 @@ def get_feasible_solution1(opt_prob, x_nlp):
 			new_bounds_lb[ix_int[ix_int_var]] = round_val
 			new_bounds_ub = np.array(bounds_ub)
 			new_bounds_ub[ix_int[ix_int_var]] = round_val
-			# Получаем новое NLP-решение
-			res = opt.minimize(
-				fun=opt_prob.objective.fun,
-				bounds=opt.Bounds(new_bounds_lb, new_bounds_ub),
-				constraints=constraints,
-				x0=x_nlp,
-				method="trust-constr",
-				options={'verbose': 0, "maxiter": 200}
+			# получаем новую NLP задачу с фиксированными значениями round_val для целочисленной переменной ix_int_var
+			new_opt_prob = optimization_problem(
+				dvars(
+					opt_prob.dvars.n,
+					opt_prob.dvars.ix_int,
+					opt_prob.dvars.ix_cont,
+					bounds(new_bounds_lb, new_bounds_ub),
+					x_nlp
+				),
+				opt_prob.objective,
+				opt_prob.linear_constraints,
+				opt_prob.nonlinear_constraints
 			)
+			# Получаем новое NLP-решение
+			res = get_NLP_lower_bound(new_opt_prob)
 			# если допустимое решение не найдено - идём наверх с пустым
-			if not (res.success and (res.constr_violation <= 1e-6)):
+			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
 				return None
 			# если допустимое решение найдено
-			res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
 			print(res)
 			# если не осталось больше целочисленных компонент, которые мы ещё не зафиксировали - задача решена
 			if len(ix_int) <= 1:
@@ -263,20 +261,25 @@ def get_feasible_solution1(opt_prob, x_nlp):
 			new_bounds_lb[ix_int[ix_int_var]] = round_val
 			new_bounds_ub = np.array(bounds_ub)
 			new_bounds_ub[ix_int[ix_int_var]] = round_val
-			# Получаем новое NLP-решение
-			res = opt.minimize(
-				fun=opt_prob.objective.fun,
-				bounds=opt.Bounds(new_bounds_lb, new_bounds_ub),
-				constraints=constraints,
-				x0=x_nlp,
-				method="trust-constr",
-				options={'verbose': 0, "maxiter": 200}
+			# получаем новую NLP задачу с фиксированными значениями round_val для целочисленной переменной ix_int_var
+			new_opt_prob = optimization_problem(
+				dvars(
+					opt_prob.dvars.n,
+					opt_prob.dvars.ix_int,
+					opt_prob.dvars.ix_cont,
+					bounds(new_bounds_lb, new_bounds_ub),
+					x_nlp
+				),
+				opt_prob.objective,
+				opt_prob.linear_constraints,
+				opt_prob.nonlinear_constraints
 			)
+			# Получаем новое NLP-решение
+			res = get_NLP_lower_bound(new_opt_prob)
 			# если допустимое решение не найдено - идём наверх с пустым
-			if not (res.success and (res.constr_violation <= 1e-6)):
+			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
 				return None
 			# если допустимое решение найдено
-			res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
 			print(res)
 			# если не осталось больше целочисленных компонент, которые мы ещё не зафиксировали - задача решена
 			if len(ix_int) <= 1:
