@@ -21,6 +21,8 @@ import docplex.cp.model as docplex_cp_model
 
 from gekko import GEKKO
 
+import mip as mip
+
 import rbfopt
 ###############################################################################
 '''
@@ -430,6 +432,31 @@ model_gekko_minlp.Obj(-(1000 - model_gekko_minlp.y[0]**2 - 2*model_gekko_minlp.x
 # print(model_gekko_minlp.options.SOLVESTATUS)
 # print('Objective: ' + str(model_gekko_minlp.options.objfcnval))
 
+##############################################################################
+# Задача как MIP MILP
+##############################################################################
+model_mip = mip.Model(name="MIP_POA", solver_name=mip.CBC)
+
+#  (‘B’) BINARY, (‘C’) CONTINUOUS and (‘I’) INTEGER
+# непрерывные переменные
+model_mip.y = [model_mip.add_var(name="y", lb=0., ub=10., var_type=mip.CONTINUOUS)]
+# целочисленные переменные
+model_mip.x = [model_mip.add_var(name="x{0}".format(i), lb=0., ub=10., var_type=mip.INTEGER) for i in range(2)]
+
+# линейные ограничения
+model_mip.lin_cons = model_mip.add_constr(8 * model_mip.y[0] + 14 * model_mip.x[0] + 7 * model_mip.x[1] - 56 == 0)
+
+# xvars = [model_mip.y[0], model_mip.x[0], model_mip.x[1]]
+# model_mip.objective = mip.minimize(model_mip.y[0])
+# res = model_mip.optimize()
+# if res.value == res.INFEASIBLE:
+# 	print("No solution!")
+# else:
+# 	if len(model_mip.objective.expr.values()) > 0:
+# 		print(model_mip.objective_value)
+# 	print([x.x for x in xvars])
+# model_mip.remove([model_mip.lin_cons])
+
 ###############################################################################
 # Функция, переводящая переменные решения pyomo в вектор
 def DV_2_vec(model):
@@ -457,6 +484,37 @@ importlib.reload(mg_minlp)
 poa = mg_minlp.mmaxgon_MINLP_POA(
 	eps=1e-6
 )
+
+###############################################################################
+# MIP MILP
+###############################################################################
+importlib.reload(mg_minlp)
+model_mip = mip.Model(name="MIP_POA", solver_name=mip.CBC)
+model_mip.y = [model_mip.add_var(name="y", lb=0., ub=10., var_type=mip.CONTINUOUS)]
+model_mip.x = [model_mip.add_var(name="x{0}".format(i), lb=0., ub=10., var_type=mip.INTEGER) for i in range(2)]
+model_mip.lin_cons = model_mip.add_constr(8 * model_mip.y[0] + 14 * model_mip.x[0] + 7 * model_mip.x[1] - 56 == 0)
+
+mip_mip_model_wrapper = mg_minlp.mip_MIP_model_wrapper(
+	mip_object=mip,
+	mip_MIP_model=model_mip
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=mip_mip_model_wrapper,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
+	decision_vars_to_vector_fun=DV_2_vec_gekko,
+	tolerance=1e-1,
+	add_constr="ALL",
+	# NLP_refiner_object=scipy_refiner_optimizer_obj,
+	# NLP_projector_object=scipy_projector_optimizer_obj,
+	lower_bound=nlp_lower_bound
+	# ,custom_constraints_list=[mip_mip_model_wrapper.get_mip_model().y[0] >= 1]
+	# ,approximation_points=approximation_points
+)
+print(time() - start_time)
+print(res)
 
 ###############################################################################
 # GEKKO Нелинейная функция цели, есть нелинейные ограничения

@@ -650,6 +650,124 @@ class pyomo_MIP_model_wrapper:
 		return True
 
 ####################################################################################################
+# Обёртка описания задачи MIP в виде MIP
+####################################################################################################
+class mip_MIP_model_wrapper:
+	def __init__(
+		self,
+		mip_object,                     # mip из import mip as mip
+		mip_MIP_model,                  # Модель MIP mip.Model()
+		mip_solver_options=None         # TO DO !!!!!!!!!!!!
+	):
+		self.__mip_object = mip_object
+		# copy.deepcopy НЕ РАБОТАТ!!!!!!
+		# self.__mip_MIP_model = copy.deepcopy(mip_MIP_model)
+		self.__mip_MIP_model = mip_MIP_model
+
+		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
+		self.__mip_MIP_model.__non_lin_cons = []
+		# ограничения на функцию цели (линейная аппроксимация функции цели, добавляется после каждой итерации)
+		self.__mip_MIP_model.__obj_cons = []
+		# дополнительные пользовательские ограничения
+		self.__mip_MIP_model.__custom_cons = []
+
+		"""
+		Если функция цели определена в pyomo, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
+		Если функции цели в pyomo_MILP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
+		В этом случае мы будем минимизировать её линейные аппроксимации, и для этого нам понадобится вспомогательная
+		переменная решений mu
+		"""
+		self.__if_objective_defined = (len(self.__mip_MIP_model.objective.expr.values()) > 0)
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mip_MIP_model.__mu = self.__mip_MIP_model.add_var(name="mu", lb=-np.Inf, ub=np.Inf, var_type="C")
+			# На первом шаге накладываем на неё ограничение снизу, чтобы было решение
+			self.__mip_MIP_model.__mu_temp_cons = self.__mip_MIP_model.add_constr(self.__mip_MIP_model.__mu >= -1e9)
+			# цель MILP
+			self.__mip_MIP_model.objective = self.__mip_object.minimize(self.__mip_MIP_model.__mu)
+		else:
+			self.__mip_MIP_model.__mu_temp_cons = None
+			
+		if mip_solver_options != None:
+			for key in mip_solver_options.keys():
+				# добавить параметры оптимизации !!!
+				pass
+
+	# возвращаем модель
+	def get_mip_model(self):
+		return self.__mip_MIP_model
+
+	# возвращаем число аппроксимаций функции цели
+	def get_object_cuts_num(self):
+		return len(self.__mip_MIP_model.__obj_cons)
+
+	# возвращаем число аппроксимаций нелинейных ограничений
+	def get_non_lin_constr_cuts_num(self):
+		return len(self.__mip_MIP_model.__non_lin_cons)
+
+	# удаляем временные ограничения
+	def del_temp_constr(self):
+		if (not self.__if_objective_defined) and (not (self.__mip_MIP_model.__mu_temp_cons is None)):
+			print("Deletint temp constraints!")
+			self.__mip_MIP_model.remove(self.__mip_MIP_model.__mu_temp_cons)
+			self.__mip_MIP_model.__mu_temp_cons = None
+			return True
+		return False
+
+	# задана ли функция цели в pyomo
+	def if_objective_defined(self):
+		return self.__if_objective_defined
+
+	# значение целевой функции
+	def get_objective_value(self):
+		return self.__mip_MIP_model.objective_value
+
+	# значения переменных решения
+	def get_values(self, xvars):
+		return [x.x for x in xvars]
+
+	# очищаем аппроксимационные и пользовательские ограничения
+	def clear(self):
+		self.__mip_MIP_model.remove(self.__mip_MIP_model.__non_lin_cons)
+		self.__mip_MIP_model.remove(self.__mip_MIP_model.__obj_cons)
+		self.__mip_MIP_model.remove(self.__mip_MIP_model.__custom_cons)
+		self.__mip_MIP_model.__non_lin_cons.clear()
+		self.__mip_MIP_model.__obj_cons.clear()
+		self.__mip_MIP_model.__custom_cons.clear()
+		if (not self.__if_objective_defined) and (self.__mip_MIP_model.__mu_temp_cons is None):
+			# На первом шаге накладываем на вспомогательную переменную решений ограничение снизу, чтобы было решение
+			self.__mip_MIP_model.__mu_temp_cons = self.__mip_MIP_model.add_constr(self.__mip_MIP_model.__mu >= -1e9)
+
+	# добавляем линеаризованные ограничения на функцию цели
+	def add_obj_constr(self, fx, gradf, xgradf, xvars):
+		expr = \
+			fx - \
+			xgradf + \
+			sum(xvars[i] * gradf[i] for i in range(len(xvars))) <= self.__mip_MIP_model.__mu
+		new_cons = self.__mip_MIP_model.add_constr(expr)
+		self.__mip_MIP_model.__obj_cons.append(new_cons)
+
+	# добавляем лианеризованные ограничения на нарушенные ограничения
+	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
+		expr = \
+			gx_violated[k] - \
+			xgradg_violated[k] + \
+			sum(xvars[i] * gradg_violated[k][i] for i in range(len(xvars))) <= 0
+		new_cons = self.__mip_MIP_model.add_constr(expr)
+		self.__mip_MIP_model.__non_lin_cons.append(new_cons)
+
+	# добавляем дополнительное пользовательское ограничение
+	def add_custom_constr(self, expr):
+		new_cons = self.__mip_MIP_model.add_constr(expr)
+		self.__mip_MIP_model.__custom_cons.append(new_cons)
+
+	def solve(self):
+		res = self.__mip_MIP_model.optimize()
+		if res.value == res.INFEASIBLE:
+			return False
+		return True
+	
+####################################################################################################
 # Обёртка описания задачи MIP в виде google ortools cp_sat
 ####################################################################################################
 class ortools_cp_sat_MIP_model_wrapper:
