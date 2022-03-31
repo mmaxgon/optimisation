@@ -44,6 +44,7 @@ c3: x[2]^2 + x[3]^2 <= 12;
 ####################################################################################################
 # Абстрактное описание задачи
 ####################################################################################################
+importlib.reload(mg_minlp)
 # Начальное значение
 x0 = [1.75, 3, 0]
 # Переменные решения
@@ -52,9 +53,20 @@ decision_vars = mg_minlp.dvars(3, [1, 2], [0], mg_minlp.bounds([0, 0, 0], [10, 1
 # Целевая функция
 def obj(x):
 	return -(1000 - x[0]**2 - 2*x[1]**2 - x[2]**2 - x[0]*x[1] - x[0]*x[2])
-	# return 2*x[0] + 3*x[1] + 4*x[2]
-objective_fun = mg_minlp.objective(3, False, obj, None)
-objective_lin_fun = mg_minlp.objective(3, True, None, [2, 3, 4])
+def lin_obj(x):
+	return 2*x[0] + 3*x[1] + 4*x[2]
+objective_fun = mg_minlp.objective(n=3, if_linear=False, fun=obj, lin_coeffs=None)
+objective_lin_fun = mg_minlp.objective(n=3, if_linear=True, fun=lin_obj, lin_coeffs=[2, 3, 4])
+
+# Линейные ограничения
+lin_cons = mg_minlp.linear_constraints(
+		n=3,
+		m=1,
+		A=[
+			[8, 14, 7]
+		],
+		bounds=mg_minlp.bounds([56], [56])
+	)
 
 # Нелинейные ограничения
 def non_lin_cons_fun(x):
@@ -63,9 +75,9 @@ def non_lin_cons_fun(x):
 			x[1]**2 + x[2]**2 - 12
 		]
 non_lin_cons = mg_minlp.nonlinear_constraints(
-		2,
-		non_lin_cons_fun,
-		mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
+		m=2,
+		fun=non_lin_cons_fun,
+		bounds=mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
 	)
 
 # Нелинейные ограничения для целиком целочисленной задачи
@@ -78,15 +90,6 @@ non_lin_cons_cp = mg_minlp.nonlinear_constraints(
 		2,
 		non_lin_cons_fun_cp,
 		mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
-	)
-
-# Линейные ограничения
-lin_cons = mg_minlp.linear_constraints(
-		1,
-		[
-			[8, 14, 7]
-		],
-		mg_minlp.bounds([56], [56])
 	)
 
 opt_prob = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons)
@@ -490,7 +493,6 @@ poa = mg_minlp.mmaxgon_MINLP_POA(
 ###############################################################################
 # MIP MILP
 ###############################################################################
-importlib.reload(mg_minlp)
 model_mip = mip.Model(name="MIP_POA", solver_name=mip.CBC)
 model_mip.y = [model_mip.add_var(name="y", lb=0., ub=10., var_type=mip.CONTINUOUS)]
 model_mip.x = [model_mip.add_var(name="x{0}".format(i), lb=0., ub=10., var_type=mip.INTEGER) for i in range(2)]

@@ -1,33 +1,105 @@
 ####################################################################################################
 # MINLP with Polyhedral Outer Approximation
 ####################################################################################################
-from collections import namedtuple
+# from collections import namedtuple
+from dataclasses import dataclass, field, astuple, asdict
 import copy
 import numpy as np
 import scipy.optimize as opt
 
 import pyomo.environ as pyomo
-# import ortools.sat.python.cp_model as ortools_cp_model
-# import docplex.mp.model as docplex_mp_model
-# from gekko import GEKKO
 
 ####################################################################################################
 # Объекты абстрактного описания задачи
 ####################################################################################################
-
+# Два варианта описания: старый через namedtuple и новый через dataclass (python >= 3.7)
 # Границы
-bounds = namedtuple("bounds", ["lb", "ub"])
-# Переменные решения
-dvars = namedtuple("dvars", ["n", "ix_int", "ix_cont", "bounds", "x0"])
-# Цель
-objective = namedtuple("objective", ["n", "if_linear", "fun", "lin_coeffs"])
-# Линейные ограничения
-linear_constraints = namedtuple("linear_constraints", ["m", "A", "bounds"])
-# Нелинейные ограничения
-nonlinear_constraints = namedtuple("nonlinear_constraints", ["m", "fun", "bounds"])
-# Описание оптимизационной задачи
-optimization_problem = namedtuple("optimization_problem", ["dvars", "objective", "linear_constraints", "nonlinear_constraints"])
+# bounds = namedtuple("bounds", ["lb", "ub"])
+@dataclass
+class bounds:
+	lb: np.ndarray
+	ub: np.ndarray
+	def __post_init__(self):
+		self.lb = np.array(self.lb)
+		self.ub = np.array(self.ub)
+		assert(np.all(self.lb <= self.ub))
 
+# Переменные решения
+# dvars = namedtuple("dvars", ["n", "ix_int", "ix_cont", "bounds", "x0"])
+@dataclass
+class dvars:
+	n: int
+	ix_int:  np.ndarray
+	ix_cont: np.ndarray
+	bounds: bounds
+	x0: np.array
+	def __post_init__(self):
+		self.ix_int = np.array(self.ix_int)
+		self.ix_cont = np.array(self.ix_cont)
+		assert(len(np.intersect1d(self.ix_int, self.ix_cont, assume_unique=True, return_indices=False))) == 0
+		assert(len(np.union1d(self.ix_int, self.ix_cont)) == self.n)
+		if not (self.x0 is None):
+			assert(len(self.x0) == self.n)
+		assert(len(self.bounds.ub) == len(self.bounds.lb) == self.n)
+
+# Цель
+# objective = namedtuple("objective", ["n", "if_linear", "fun", "lin_coeffs"])
+@dataclass
+class objective:
+	n: int
+	if_linear:  bool
+	fun: object = None
+	lin_coeffs: np.array = None
+	def __post_init__(self):
+		if self.if_linear:
+			assert(not(self.lin_coeffs is None))
+			assert(len(self.lin_coeffs) == self.n)
+		else:
+			assert(not (self.fun is None))
+
+# Линейные ограничения
+# linear_constraints = namedtuple("linear_constraints", ["m", "A", "bounds"])
+@dataclass
+class linear_constraints:
+	n: int
+	m: int
+	A: np.array
+	bounds: bounds
+	def __post_init__(self):
+		self.A = np.array(self.A)
+		assert(not(self.A is None))
+		assert(self.A.shape == (self.m, self.n))
+		assert(self.bounds.ub.shape == self.bounds.lb.shape == (self.m,))
+
+# Нелинейные ограничения
+# nonlinear_constraints = namedtuple("nonlinear_constraints", ["m", "fun", "bounds"])
+@dataclass
+class nonlinear_constraints:
+	m: int
+	fun: object
+	bounds: bounds
+	def __post_init__(self):
+		assert(not(self.fun is None))
+		assert(self.bounds.ub.shape == self.bounds.lb.shape == (self.m,))
+
+# Описание оптимизационной задачи
+# optimization_problem = namedtuple("optimization_problem", ["dvars", "objective", "linear_constraints", "nonlinear_constraints"])
+@dataclass
+class optimization_problem:
+	dvars: dvars
+	objective: objective
+	linear_constraints: linear_constraints
+	nonlinear_constraints: nonlinear_constraints
+	def __post_init__(self):
+		assert(not(self.dvars is None))
+		assert(not(self.objective is None) or not(self.linear_constraints is None) or not (self.nonlinear_constraints is None))
+		n = self.dvars.n
+		assert(n == self.objective.n)
+		if not (self.linear_constraints is None):
+			assert(n == self.linear_constraints.n)
+		if not (self.objective is None):
+			assert(n == self.objective.n)
+		
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
