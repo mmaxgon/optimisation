@@ -22,6 +22,7 @@ class bounds:
 	def __post_init__(self):
 		self.lb = np.array(self.lb)
 		self.ub = np.array(self.ub)
+		assert(self.lb.shape == self.ub.shape)
 		assert(np.all(self.lb <= self.ub))
 
 # Переменные решения
@@ -32,11 +33,12 @@ class dvars:
 	ix_int:  np.ndarray
 	ix_cont: np.ndarray
 	bounds: bounds
-	x0: np.array
+	x0: np.ndarray
 	def __post_init__(self):
 		self.ix_int = np.array(self.ix_int)
 		self.ix_cont = np.array(self.ix_cont)
-		assert(len(np.intersect1d(self.ix_int, self.ix_cont, assume_unique=True, return_indices=False))) == 0
+		self.x0 = np.array(self.x0)
+		assert(len(np.intersect1d(self.ix_int, self.ix_cont, assume_unique=True, return_indices=False)) == 0)
 		assert(len(np.union1d(self.ix_int, self.ix_cont)) == self.n)
 		if not (self.x0 is None):
 			assert(len(self.x0) == self.n)
@@ -66,8 +68,8 @@ class linear_constraints:
 	A: np.array
 	bounds: bounds
 	def __post_init__(self):
-		self.A = np.array(self.A)
 		assert(not(self.A is None))
+		self.A = np.array(self.A)
 		assert(self.A.shape == (self.m, self.n))
 		assert(self.bounds.ub.shape == self.bounds.lb.shape == (self.m,))
 
@@ -75,6 +77,7 @@ class linear_constraints:
 # nonlinear_constraints = namedtuple("nonlinear_constraints", ["m", "fun", "bounds"])
 @dataclass
 class nonlinear_constraints:
+	n: int
 	m: int
 	fun: object
 	bounds: bounds
@@ -97,6 +100,8 @@ class optimization_problem:
 		assert(n == self.objective.n)
 		if not (self.linear_constraints is None):
 			assert(n == self.linear_constraints.n)
+		if not (self.nonlinear_constraints is None):
+			assert(n == self.nonlinear_constraints.n)
 		if not (self.objective is None):
 			assert(n == self.objective.n)
 		

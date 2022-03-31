@@ -75,6 +75,7 @@ def non_lin_cons_fun(x):
 			x[1]**2 + x[2]**2 - 12
 		]
 non_lin_cons = mg_minlp.nonlinear_constraints(
+		n=3,
 		m=2,
 		fun=non_lin_cons_fun,
 		bounds=mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
@@ -87,9 +88,10 @@ def non_lin_cons_fun_cp(x):
 			x[1]**2 + x[2]**2 - 13
 		]
 non_lin_cons_cp = mg_minlp.nonlinear_constraints(
-		2,
-		non_lin_cons_fun_cp,
-		mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
+		n=3,
+		m=2,
+		fun=non_lin_cons_fun_cp,
+		bounds=mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
 	)
 
 opt_prob = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons)
