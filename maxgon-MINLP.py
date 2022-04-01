@@ -102,7 +102,7 @@ opt_prob_lin = mg_minlp.optimization_problem(decision_vars, objective_lin_fun, l
 ####################################################################################################
 # Получение решения из описания opt_prob
 ####################################################################################################
-sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=20)
+sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=200)
 print(sol)
 ####################################################################################################
 # Получение решения из описаний на различных фреймворках
@@ -162,7 +162,7 @@ model_milp.lin_cons = pyomo.Constraint(expr=
 
 approximation_points = [mg_minlp.generate_x(opt_prob) for i in range(200)]
 # model_milp.obj = pyomo.Objective(expr = -model_milp.x[1], sense=pyomo.minimize)
-# sf = pyomo.SolverFactory("cbc")
+# sf = pyomo.SolverFactory("cbc", executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe")
 # sf.options["allowableGap"] = 1e-4
 # sf.options["integerTolerance"] = 1e-4
 # sf.options["seconds"] = 1e-1
@@ -171,7 +171,7 @@ approximation_points = [mg_minlp.generate_x(opt_prob) for i in range(200)]
 # start = time()
 # result = sf.solve(model_milp, tee=False, warmstart=True)
 # print(time() - start)
-# [model_milp.y[0](), model_milp.x[1](), model_milp.x[1]()]
+# print([model_milp.y[0](), model_milp.x[1](), model_milp.x[1]()])
 # model_milp.del_component(model_milp.obj)
 
 ##############################################################################
@@ -799,7 +799,8 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
 	mip_solver_name="cbc",
-	mip_solver_options={"allowableGap": 1e-1, "integerTolerance": 1e-1, "seconds": 1e-1}
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe",
+	mip_solver_options={"allowableGap": 1e-1, "integerTolerance": 1e-1, "seconds": 1e1}
 )
 model = pyomo_mip_model_wrapper.get_mip_model()
 
@@ -870,7 +871,8 @@ print(res1)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc"
+	mip_solver_name="cbc",
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe"
 )
 start_time = time()
 res2 = poa.solve(
@@ -890,7 +892,8 @@ print(res2)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc"
+	mip_solver_name="cbc",
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe"
 )
 
 start_time = time()
@@ -908,7 +911,8 @@ print(res3)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc"
+	mip_solver_name="cbc",
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe"
 )
 
 start_time = time()
@@ -934,7 +938,8 @@ print(res4)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc"
+	mip_solver_name="cbc",
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe"
 )
 res5 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
@@ -953,7 +958,8 @@ model_milp.obj = pyomo.Objective(expr=model_milp.y[0] + 2*model_milp.x[1] + mode
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc"
+	mip_solver_name="cbc",
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe"
 )
 res6 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
@@ -971,7 +977,8 @@ print(res6)
 pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
-	mip_solver_name="cbc"
+	mip_solver_name="cbc",
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe"
 )
 res7 = poa.solve(
 	MIP_model=pyomo_mip_model_wrapper,
@@ -1071,6 +1078,7 @@ pyomo_mip_model_wrapper = mg_minlp.pyomo_MIP_model_wrapper(
 	pyomo=pyomo,
 	pyomo_MIP_model=model_milp,
 	mip_solver_name="cbc",
+	mip_solver_executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe",
 	mip_solver_options={"allowableGap": 1e-1, "integerTolerance": 1e-1, "seconds": 1e-1}
 )
 model = pyomo_mip_model_wrapper.get_mip_model()

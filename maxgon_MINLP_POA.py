@@ -474,6 +474,8 @@ def get_feasible_solution2(opt_prob, x_nlp):
 	model_milp.obj_cons = pyomo.ConstraintList()
 	prev_dist = np.Inf
 
+	sf = pyomo.SolverFactory("cbc", executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe")
+	# sf = pyomo.SolverFactory("cbc")
 	while True:
 		# MILP итерация решения
 		model_milp.obj_cons.clear()
@@ -482,7 +484,6 @@ def get_feasible_solution2(opt_prob, x_nlp):
 			model_milp.obj_cons.add(x_var[i] - x_nlp[i] <= model_milp.mu)
 			model_milp.obj_cons.add(x_var[i] - x_nlp[i] >= -model_milp.mu)
 		# решаем: находим самое близкое MILP-решение к NLP-решению
-		sf = pyomo.SolverFactory("cbc")
 		result = sf.solve(model_milp, tee=False, warmstart=True)
 		if result.Solver()["Termination condition"] == pyomo.TerminationCondition.infeasible:
 			raise ValueError("Не найдено MILP-решение!")
@@ -644,7 +645,8 @@ def get_minlp_solution(
 	upper_bound = np.Inf
 	best_sol = None
 	if_first_step = True
-	sf = pyomo.SolverFactory("cbc")
+	sf = pyomo.SolverFactory("cbc", executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe")
+	# sf = pyomo.SolverFactory("cbc")
 	step_num = 0
 	
 	while True:
@@ -745,6 +747,7 @@ class pyomo_MIP_model_wrapper:
 		pyomo,                         # Объект pyomo.environ
 		pyomo_MIP_model,               # Модель MIP pyomo.ConcreteModel() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно в pyomo
 		mip_solver_name="cbc",         # MIP солвер (может быть MILP или MINLP, умеющий работать с классом задач, описанным в pyomo)
+		mip_solver_executable=None,    # Путь к exe-файлу
 		mip_solver_options=None
 	):
 		self.__pyomo = pyomo
@@ -773,7 +776,10 @@ class pyomo_MIP_model_wrapper:
 			# цель MILP
 			self.__pyomo_MIP_model.obj = self.__pyomo.Objective(expr=self.__pyomo_MIP_model.__mu, sense=self.__pyomo.minimize)
 
-		self.__mip_solver = self.__pyomo.SolverFactory(self.__mip_solver_name)
+		if mip_solver_executable is None:
+			self.__mip_solver = self.__pyomo.SolverFactory(mip_solver_name)
+		else:
+			self.__mip_solver = self.__pyomo.SolverFactory(mip_solver_name, executable=mip_solver_executable)
 		if mip_solver_options != None:
 			for key in mip_solver_options.keys():
 				self.__mip_solver.options[key] = mip_solver_options[key]
