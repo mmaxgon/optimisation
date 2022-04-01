@@ -73,6 +73,15 @@ class linear_constraints:
 		assert(self.A.shape == (self.m, self.n))
 		assert(self.bounds.ub.shape == self.bounds.lb.shape == (self.m,))
 
+def join_linear_constraints(lin_cons1, lin_cons2):
+	assert (lin_cons1.n == lin_cons2.n)
+	A = np.stack((lin_cons1.A, lin_cons2.A)).reshape(lin_cons1.m + lin_cons2.m, lin_cons1.n)
+	ub = np.stack((lin_cons1.bounds.ub, lin_cons2.bounds.ub)).reshape(lin_cons1.m + lin_cons2.m, )
+	lb = np.stack((lin_cons1.bounds.lb, lin_cons2.bounds.lb)).reshape(lin_cons1.m + lin_cons2.m, )
+	new_bounds = bounds(lb, ub)
+	new_lin_cons = linear_constraints(lin_cons1.n, lin_cons1.m + lin_cons2.m, A, new_bounds)
+	return new_lin_cons
+
 # Нелинейные ограничения
 # nonlinear_constraints = namedtuple("nonlinear_constraints", ["m", "fun", "bounds"])
 @dataclass
@@ -112,21 +121,25 @@ class optimization_problem:
 def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
 	if opt_prob.objective.if_linear and (opt_prob.nonlinear_constraints is None):
 		# линейная задача
-		ix_ub = np.where(opt_prob.linear_constraints.bounds.lb < opt_prob.linear_constraints.bounds.ub)[0]
+		if not(custom_linear_constraints is None):
+			lin_cons = join_linear_constraints(opt_prob.lin_cons, custom_linear_constraints)
+		else:
+			lin_cons = opt_prob.linear_constraints
+		ix_ub = np.where(lin_cons.bounds.lb < lin_cons.bounds.ub)[0]
 		if len(ix_ub) == 0:
 			A_ub = None
 			b_ub = None
 		else:
-			A_ub = np.array(opt_prob.linear_constraints.A)[ix_ub]
-			b_ub = np.array(opt_prob.linear_constraints.bounds.ub)[ix_ub]
+			A_ub = np.array(lin_cons.A)[ix_ub]
+			b_ub = np.array(lin_cons.bounds.ub)[ix_ub]
 			
-		ix_eq = np.where(opt_prob.linear_constraints.bounds.lb == opt_prob.linear_constraints.bounds.ub)[0]
+		ix_eq = np.where(lin_cons.bounds.lb == lin_cons.bounds.ub)[0]
 		if len(ix_eq) == 0:
 			A_eq = None
 			b_eq = None
 		else:
-			A_eq = np.array(opt_prob.linear_constraints.A)[ix_eq]
-			b_eq = np.array(opt_prob.linear_constraints.bounds.ub)[ix_eq]
+			A_eq = np.array(lin_cons.A)[ix_eq]
+			b_eq = np.array(lin_cons.bounds.ub)[ix_eq]
 		
 		bounds = []
 		for i in range(len(opt_prob.dvars.bounds.lb)):
@@ -136,7 +149,7 @@ def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonl
 		
 		res = opt.linprog(c, A_ub, b_ub, A_eq, b_eq, bounds, method='simplex', callback=None, options=None, x0=opt_prob.dvars.x0)
 		print(res)
-		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": np.max(np.abs(res.con))}
+		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": np.max(res.con)}
 		return res
 	
 	# нелинейная задача
@@ -152,19 +165,22 @@ def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonl
 			opt_prob.nonlinear_constraints.bounds.ub
 		)
 	]
-	if custom_linear_constraints != None:
+	if not(custom_linear_constraints is None):
 		constraints.append(
 			opt.LinearConstraint(
-			custom_linear_constraints.A,
-			custom_linear_constraints.bounds.lb,
-			custom_linear_constraints.bounds.ub
-		))
-	if custom_nonlinear_constraints != None:
-		constraints.append(opt.NonlinearConstraint(
-			custom_nonlinear_constraints.fun,
-			custom_nonlinear_constraints.bounds.lb,
-			custom_nonlinear_constraints.bounds.ub
-		))
+				custom_linear_constraints.A,
+				custom_linear_constraints.bounds.lb,
+				custom_linear_constraints.bounds.ub
+			)
+		)
+	if not(custom_nonlinear_constraints is None):
+		constraints.append(
+			opt.NonlinearConstraint(
+				custom_nonlinear_constraints.fun,
+				custom_nonlinear_constraints.bounds.lb,
+				custom_nonlinear_constraints.bounds.ub
+			)
+		)
 	res = opt.minimize(
 		fun=opt_prob.objective.fun,
 		bounds=opt.Bounds(opt_prob.dvars.bounds.lb, opt_prob.dvars.bounds.ub),

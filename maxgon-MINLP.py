@@ -94,6 +94,7 @@ non_lin_cons_cp = mg_minlp.nonlinear_constraints(
 		bounds=mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
 	)
 
+# new_lin_cons = mg_minlp.join_linear_constraints(lin_cons, lin_cons)
 opt_prob = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons)
 opt_prob_cp = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons_cp)
 opt_prob_lin = mg_minlp.optimization_problem(decision_vars, objective_lin_fun, lin_cons, None)
@@ -101,7 +102,7 @@ opt_prob_lin = mg_minlp.optimization_problem(decision_vars, objective_lin_fun, l
 ####################################################################################################
 # Получение решения из описания opt_prob
 ####################################################################################################
-sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=200)
+sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=20)
 print(sol)
 ####################################################################################################
 # Получение решения из описаний на различных фреймворках
@@ -1079,7 +1080,7 @@ def obj_funct(t):
 	# Сначала получаем нижнюю границу решения как решение NLP
 	res_nlp = mg_minlp.get_relaxed_solution(
 		opt_prob,
-		custom_linear_constraints=mg_minlp.linear_constraints(1, [[1, 0, 0]], mg_minlp.bounds([t[0]], [t[0] + 1 - 1e-6]))
+		custom_linear_constraints=mg_minlp.linear_constraints(n=3, m=1, A=[[1, 0, 0]], bounds=mg_minlp.bounds(lb=[t[0]], ub=[t[0] + 1 - 1e-6]))
 	)
 	if res_nlp["success"] and res_nlp["constr_violation"] < 1e-6:
 		lower_bound = res_nlp["obj"]
