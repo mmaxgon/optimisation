@@ -37,6 +37,7 @@ git add autograd.py
 git add pyomo-opt.py
 git add torch-opt.py
 git add scip-opt.py
+git add constraint-opt.py
 git add maxgon-MINLP.py
 git add maxgon_MINLP_POA.py
 

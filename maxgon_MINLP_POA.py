@@ -119,10 +119,10 @@ class optimization_problem:
 ####################################################################################################
 
 def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
-	if opt_prob.objective.if_linear and (opt_prob.nonlinear_constraints is None):
+	if opt_prob.objective.if_linear and (opt_prob.nonlinear_constraints is None) and (custom_nonlinear_constraints is None):
 		# линейная задача
 		if not(custom_linear_constraints is None):
-			lin_cons = join_linear_constraints(opt_prob.lin_cons, custom_linear_constraints)
+			lin_cons = join_linear_constraints(opt_prob.linear_constraints, custom_linear_constraints)
 		else:
 			lin_cons = opt_prob.linear_constraints
 		ix_ub = np.where(lin_cons.bounds.lb < lin_cons.bounds.ub)[0]
