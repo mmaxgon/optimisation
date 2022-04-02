@@ -6,7 +6,8 @@
 # - свой BB
 ####################################################################################################
 # from collections import namedtuple
-from dataclasses import dataclass, field, astuple, asdict
+from dataclasses import dataclass, field, replace, astuple, asdict
+import itertools
 import copy
 import numpy as np
 import scipy.optimize as opt
@@ -36,7 +37,7 @@ class dvars:
 	ix_int:  np.ndarray
 	ix_cont: np.ndarray
 	bounds: bounds
-	x0: np.ndarray
+	x0: np.ndarray = None
 	def __post_init__(self):
 		self.ix_int = np.array(self.ix_int)
 		self.ix_cont = np.array(self.ix_cont)
@@ -765,3 +766,110 @@ def get_minlp_solution(
 			add_nonlin_constraints(x=x_milp, dvar_x=x_var, ix=ix_violated, gx=gx)
 
 		print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
+
+####################################################################################################
+# Branch and Bound
+####################################################################################################
+
+def get_BB_solution(opt_prob, eps=1e-3):
+	global_vars = {
+		"best_sol" : None,
+		"best_obj" : np.inf,
+		"bounds_visited" : []
+	}
+
+	def if_integer_feasible(opt_prob, x, eps=eps):
+		if (opt_prob.dvars.ix_int is None) or (len(opt_prob.dvars.ix_int) == 0):
+			return True
+		x_int = x[opt_prob.dvars.ix_int]
+		if np.all(np.min((np.ceil(x_int) - x_int, x_int - np.floor(x_int)), axis=0) <= eps):
+			return True
+		return False
+
+	def split_optimization_problem(opt_prob, x):
+		if if_integer_feasible(opt_prob, x):
+			return
+		x_int = x[opt_prob.dvars.ix_int]
+		# разбиваем по самой "нецелочисленной" переменной
+		ix_var = np.argmax(np.min(np.stack((x_int - np.floor(x_int), np.ceil(x_int) - x_int)), axis=0))
+		val_var = x_int[ix_var]
+		# текущие границы для этой переменной
+		lb = opt_prob.dvars.bounds.lb[opt_prob.dvars.ix_int[ix_var]]
+		ub = opt_prob.dvars.bounds.ub[opt_prob.dvars.ix_int[ix_var]]
+		# задача слева
+		lb_left = lb
+		ub_left = np.floor(val_var)
+		if lb_left <= ub_left:
+			bounds_left = bounds(lb=opt_prob.dvars.bounds.lb, ub=opt_prob.dvars.bounds.ub)
+			bounds_left.lb[opt_prob.dvars.ix_int[ix_var]] = lb_left
+			bounds_left.ub[opt_prob.dvars.ix_int[ix_var]] = ub_left
+			dvars_left = dvars(
+				n=opt_prob.dvars.n,
+				ix_int=opt_prob.dvars.ix_int,
+				ix_cont=opt_prob.dvars.ix_cont,
+				bounds=bounds_left,
+				x0=x
+			)
+			yield optimization_problem(
+				dvars=dvars_left,
+				objective=opt_prob.objective,
+				linear_constraints=opt_prob.linear_constraints,
+				nonlinear_constraints=opt_prob.nonlinear_constraints
+			)
+		# задача справа
+		lb_right = np.ceil(val_var)
+		ub_right = ub
+		if lb_right <= ub_right:
+			bounds_right = bounds(lb=opt_prob.dvars.bounds.lb, ub=opt_prob.dvars.bounds.ub)
+			bounds_right.lb[opt_prob.dvars.ix_int[ix_var]] = lb_right
+			bounds_right.ub[opt_prob.dvars.ix_int[ix_var]] = ub_right
+			dvars_right = dvars(
+				n=opt_prob.dvars.n,
+				ix_int=opt_prob.dvars.ix_int,
+				ix_cont=opt_prob.dvars.ix_cont,
+				bounds=bounds_right,
+				x0=x
+			)
+			yield optimization_problem(
+				dvars=dvars_right,
+				objective=opt_prob.objective,
+				linear_constraints=opt_prob.linear_constraints,
+				nonlinear_constraints=opt_prob.nonlinear_constraints
+			)
+
+	def get_BB_solution_internal(opt_prob, global_vars):
+		res = get_relaxed_solution(opt_prob)
+		if not(res["success"] and res["constr_violation"] <= 1e-6):
+			return None
+		print(res)
+		x = res["x"]
+		obj = res["obj"]
+		if obj >= global_vars["best_obj"]:
+			return None
+		if if_integer_feasible(opt_prob, x):
+			print("feasible")
+			if obj < global_vars["best_obj"]:
+				global_vars["best_obj"] = res["obj"]
+				global_vars["best_sol"] = x
+				print("best solution: " + str(global_vars["best_sol"]) + str(global_vars["best_obj"]))
+			return res
+		new_opt_probs = [p for p in split_optimization_problem(opt_prob, x)]
+		new_results = []
+		for new_opt_prob in new_opt_probs:
+			print(new_opt_prob.dvars.bounds)
+			hash_bounds = hash(str(new_opt_prob.dvars.bounds))
+			if hash_bounds in global_vars["bounds_visited"]:
+				continue
+			global_vars["bounds_visited"].append(hash_bounds)
+			new_res = get_BB_solution_internal(new_opt_prob, global_vars)
+			if new_res is None:
+				continue
+			new_results.append(new_res)
+		if len(new_results) == 0:
+			return None
+		elif len(new_results) == 1:
+			return new_results[0]
+		else:
+			return new_results[0] if new_results[0]["obj"] <= new_results[1]["obj"] else new_results[1]
+
+	return get_BB_solution_internal(opt_prob, global_vars)
