@@ -19,7 +19,7 @@ Typical usage will follow the pattern of:
          f'success: '{best_solution.success}')
 
 """
-import collections
+# import collections
 from dataclasses import dataclass, field, replace
 import datetime
 import itertools
@@ -37,20 +37,18 @@ def set_debug_prints(is_on):
 @dataclass(frozen=True)
 class MipResult:
 	model: 'MipModel'
-	fun: float = np.inf
+	fun: float = np.inf  # !!! поменять на obj
 	x: np.ndarray = np.array([])
 	success: bool = False
-	
+
+	# соблюдается ли целочисленность дискретных переменных
 	def is_int_soln(self) -> bool:
-		"""Returns True if the result has integer values for integer variables."""
-		return np.all(self.x[self.model.int_vars] ==
-		              np.floor(self.x[self.model.int_vars]))
-	
+		return np.all(self.x[self.model.int_vars] == np.floor(self.x[self.model.int_vars]))
+
+	# индексы целочисленных переменных, значения в которых не целые числа (после успешного решения)
 	def vars_to_split(self) -> List[int]:
-		"""Returns the list of integer var indexes with non-integer solutions."""
 		if self.success:
-			return list(np.where(self.x[self.model.int_vars] !=
-			                     np.floor(self.x[self.model.int_vars]))[0])
+			return list(np.where(self.x[self.model.int_vars] != np.floor(self.x[self.model.int_vars]))[0])
 		else:
 			return []
 
@@ -62,21 +60,26 @@ class MipModel:
 	bub: Optional[np.ndarray] = None
 	Aeq: Optional[np.ndarray] = None
 	beq: Optional[np.ndarray] = None
+	# границы переменных в формате ((l1,u1), (l2,u2), (l3,u3))
 	bounds: Tuple = ()
 	int_vars: Sequence[int] = field(default_factory=list)
 	method: str = 'revised simplex'
+	# границы переменных в формате np.array([l1,l2,l3], [u1,u2,u3])
 	clip_bound: np.ndarray = field(init=False)
 	
 	def __post_init__(self):
 		if not self.minimize:
 			object.__setattr__(self, 'c', -1 * self.c)
 		if not self.bounds:
+			# размножение границ на [[0,0,...], [inf, inf,...]] по числу переменных
 			object.__setattr__(self, 'clip_bound', np.tile(np.array([[0], [np.inf]]), self.c.shape[0]))
 		else:
 			lower, upper = zip(*self.bounds)
+			# для upper переводим None в inf
 			numeric_upper = [np.inf if u is None else u for u in upper]
+			# формируем границы в формате np.array([l1,l2,l3], [u1,u2,u3])
 			object.__setattr__(self, 'clip_bound', np.array((lower, numeric_upper), dtype=np.float64))
-	
+
 	def solve(self) -> MipResult:
 		res = linprog(
 			self.c,
@@ -88,45 +91,59 @@ class MipModel:
 			method=self.method
 		)
 		if res["success"]:
+			# получаем новое решение
 			result = MipResult(
 				self,
-				(int(self.minimize) * 2 - 1) * res['fun'],
-				res['x'].clip(self.clip_bound[0], self.clip_bound[1]),
+				(int(self.minimize) * 2 - 1) * res['fun'], # умножаем результат на -1 если задача максимизации
+				res['x'].clip(self.clip_bound[0], self.clip_bound[1]), # приводим решение в границы
 				res['success'])
 		else:
+			# получаем пустое решение
 			result = MipResult(self)
 		return result
-	
+
+	# передаём дальше 2 модели, разбитые по переменной с индексом var_i по значению value или посередине(?)
 	def split_on_var(
 		self,
 		var_i: int,
 		value: Optional[float] = None
 	) -> Generator['MipModel', None, None]:
-		"""Yields two new models with bound `var_i` split at `value` or middle"""
+		# индекс var_i в рамках?
 		assert var_i in range(len(self.bounds)), 'Bad variable index for split'
+		# границы на переменную var_i
 		bound_i = self.bounds[var_i]
-		if value is None:
-			if bound_i[1] is not None:
+		if value is None: # не передано значение разбиения
+			if bound_i[1] is not None: # верхняя граница переменной задана
+				# определяем значение разбиения как среднее арифметичекое между верхней и нижней границей
 				value = self.clip_bound[:, var_i].sum() / 2.0
-			else:
+			else: # верхняя граница не задана
+				# возвращаем себя
 				yield self
 				return
 		# We know where to split, have to treat None carefully.
-		elif bound_i[1] is None:
-			bound_i = (bound_i[0], np.inf)
-		# else bound and value are set numerically.
-		assert value >= bound_i[0] and value <= bound_i[1], 'Bad value in split.'
-		new_bounds = (*self.bounds[:var_i],
-		              (bound_i[0], max(bound_i[0], np.floor(value))),
-		              *self.bounds[var_i + 1:])
+		elif bound_i[1] is None: # передано значение разбиения, не задана верхняя граница
+			bound_i = (bound_i[0], np.inf) # верхняя граница - inf
+		# теперь у нас есть и значение разбиения и верхняя граница
+		assert(value >= bound_i[0] and value <= bound_i[1], 'Bad value in split.')
+		# новые границы слева
+		new_bounds = (
+			*self.bounds[:var_i], # границы на предыдущие переменные
+			(bound_i[0], max(bound_i[0], np.floor(value))),
+			*self.bounds[var_i + 1:] # границы на последующие переменные
+		)
+		# задача слева: копируем себя с изменёнными границами
 		yield replace(self, bounds=new_bounds)
+		# новая граница справа
 		if np.isinf(bound_i[1]):
 			new_upper = (np.ceil(value), None)
 		else:
 			new_upper = (min(np.ceil(value), bound_i[1]), bound_i[1])
-		new_bounds = (*self.bounds[:var_i],
-		              new_upper,
-		              *self.bounds[var_i + 1:])
+		new_bounds = (
+			*self.bounds[:var_i],
+			new_upper,
+			*self.bounds[var_i + 1:]
+		)
+		# задача справа: копируем себя с изменёнными границами
 		yield replace(self, bounds=new_bounds)
 
 def filter_result(

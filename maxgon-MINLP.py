@@ -1,28 +1,23 @@
 import importlib
 
+import maxgon_opt_prob as mg_opt
+importlib.reload(mg_opt)
 import maxgon_MINLP_POA as mg_minlp
 importlib.reload(mg_minlp)
+
 ####################################################################################################
-# MINLP with Polyhedral Outer Approximation
 ####################################################################################################
-from collections import namedtuple
 import copy
 from time import time
 import numpy as np
-import scipy.optimize as opt
 
 import pyomo.environ as pyomo
-
+import mip as mip
 import ortools.sat.python.cp_model as ortools_cp_model
 from ortools.linear_solver import pywraplp as ortools_linear_solver
-
 import docplex.mp.model as docplex_mp_model
 import docplex.cp.model as docplex_cp_model
-
 from gekko import GEKKO
-
-import mip as mip
-
 import rbfopt
 ###############################################################################
 '''
@@ -44,28 +39,28 @@ c3: x[2]^2 + x[3]^2 <= 12;
 ####################################################################################################
 # Абстрактное описание задачи
 ####################################################################################################
-importlib.reload(mg_minlp)
+importlib.reload(mg_opt)
 # Начальное значение
 x0 = [1.75, 3, 0]
 # Переменные решения
-decision_vars = mg_minlp.dvars(3, [1, 2], [0], mg_minlp.bounds([0, 0, 0], [10, 10, 10]), x0)
+decision_vars = mg_opt.dvars(3, [1, 2], [0], mg_opt.bounds([0, 0, 0], [10, 10, 10]), x0)
 
 # Целевая функция
 def obj(x):
 	return -(1000 - x[0]**2 - 2*x[1]**2 - x[2]**2 - x[0]*x[1] - x[0]*x[2])
 def lin_obj(x):
 	return 2*x[0] + 3*x[1] + 4*x[2]
-objective_fun = mg_minlp.objective(n=3, if_linear=False, fun=obj, lin_coeffs=None)
-objective_lin_fun = mg_minlp.objective(n=3, if_linear=True, fun=lin_obj, lin_coeffs=[2, 3, 4])
+objective_fun = mg_opt.objective(n=3, if_linear=False, fun=obj, lin_coeffs=None)
+objective_lin_fun = mg_opt.objective(n=3, if_linear=True, fun=lin_obj, lin_coeffs=[2, 3, 4])
 
 # Линейные ограничения
-lin_cons = mg_minlp.linear_constraints(
+lin_cons = mg_opt.linear_constraints(
 		n=3,
 		m=1,
 		A=[
 			[8, 14, 7]
 		],
-		bounds=mg_minlp.bounds([56], [56])
+		bounds=mg_opt.bounds([56], [56])
 	)
 
 # Нелинейные ограничения
@@ -74,11 +69,11 @@ def non_lin_cons_fun(x):
 			x[0]**2 + x[1]**2 + x[2]**2 - 25,
 			x[1]**2 + x[2]**2 - 12
 		]
-non_lin_cons = mg_minlp.nonlinear_constraints(
+non_lin_cons = mg_opt.nonlinear_constraints(
 		n=3,
 		m=2,
 		fun=non_lin_cons_fun,
-		bounds=mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
+		bounds=mg_opt.bounds([-np.Inf, -np.Inf], [0, 0])
 	)
 
 # Нелинейные ограничения для целиком целочисленной задачи
@@ -87,23 +82,25 @@ def non_lin_cons_fun_cp(x):
 			x[0]**2 + x[1]**2 + x[2]**2 - 25,
 			x[1]**2 + x[2]**2 - 13
 		]
-non_lin_cons_cp = mg_minlp.nonlinear_constraints(
+non_lin_cons_cp = mg_opt.nonlinear_constraints(
 		n=3,
 		m=2,
 		fun=non_lin_cons_fun_cp,
-		bounds=mg_minlp.bounds([-np.Inf, -np.Inf], [0, 0])
+		bounds=mg_opt.bounds([-np.Inf, -np.Inf], [0, 0])
 	)
 
-# new_lin_cons = mg_minlp.join_linear_constraints(lin_cons, lin_cons)
-opt_prob = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons)
-opt_prob_cp = mg_minlp.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons_cp)
-opt_prob_lin = mg_minlp.optimization_problem(decision_vars, objective_lin_fun, lin_cons, None)
+# new_lin_cons = mg_opt.join_linear_constraints(lin_cons, lin_cons)
+opt_prob = mg_opt.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons)
+opt_prob_cp = mg_opt.optimization_problem(decision_vars, objective_fun, lin_cons, non_lin_cons_cp)
+opt_prob_lin = mg_opt.optimization_problem(decision_vars, objective_lin_fun, lin_cons, None)
 
 ####################################################################################################
 # Получение решения из описания opt_prob
 ####################################################################################################
-sol = mg_minlp.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=200)
+sol = mg_opt.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
 print(sol)
+lin_sol = mg_opt.get_minlp_solution(opt_prob_lin, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
+print(lin_sol)
 ####################################################################################################
 # Получение решения из описаний на различных фреймворках
 ####################################################################################################
@@ -111,33 +108,32 @@ print(sol)
 # Получение нижней границы решения
 ####################################################################################################
 # Нижняя граница как решение NLP-задачи
-res_LP = mg_minlp.get_relaxed_solution(opt_prob_lin)
-res_NLP = mg_minlp.get_relaxed_solution(opt_prob)
+res_LP = mg_opt.get_relaxed_solution(opt_prob_lin)
+print(res_LP)
+res_NLP = mg_opt.get_relaxed_solution(opt_prob)
 print(res_NLP)
 nlp_lower_bound = res_NLP["obj"]
-
-# mg_minlp.get_relaxed_solution(opt_prob, custom_linear_constraints=mg_minlp.linear_constraints(1, [[1,0,0]], mg_minlp.bounds([3], [4])))
 
 ####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
 ####################################################################################################
-scipy_refiner_optimizer_obj = mg_minlp.scipy_refiner_optimizer(opt_prob)
+scipy_refiner_optimizer_obj = mg_opt.scipy_refiner_optimizer(opt_prob)
 # refine = scipy_refiner_optimizer_obj.get_solution([0.3, 1.9999999980529146, 2.0000000038941708])
 # print(refine)
 
 ####################################################################################################
 # Объект, проецирующий недопустимое решение на допустимую область
 ####################################################################################################
-scipy_projector_optimizer_obj = mg_minlp.scipy_projector_optimizer(opt_prob)
+scipy_projector_optimizer_obj = mg_opt.scipy_projector_optimizer(opt_prob)
 # project = scipy_projector_optimizer_obj.get_solution([5, 6, 7])
 # print(project)
 
 ####################################################################################################
 # Получение допустимого решения как приближения непрерывного
 ####################################################################################################
-init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, res_NLP["x"])
-init_feasible1 = mg_minlp.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076, 2.48721229])
-init_feasible2 = mg_minlp.get_feasible_solution2(opt_prob, res_NLP["x"])
+init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP["x"])
+init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076, 2.48721229])
+init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP["x"])
 
 ##############################################################################
 # Задача как MILP Pyomo
@@ -160,7 +156,7 @@ model_milp.lin_cons = pyomo.Constraint(expr=
 	opt_prob.linear_constraints.A[0][0] * model_milp.y[0] +
 	sum(opt_prob.linear_constraints.A[0][i] * model_milp.x[i] for i in opt_prob.dvars.ix_int) == opt_prob.linear_constraints.bounds.ub[0])
 
-approximation_points = [mg_minlp.generate_x(opt_prob) for i in range(200)]
+approximation_points = [mg_opt.generate_x(opt_prob) for i in range(200)]
 # model_milp.obj = pyomo.Objective(expr = -model_milp.x[1], sense=pyomo.minimize)
 # sf = pyomo.SolverFactory("cbc", executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe")
 # sf.options["allowableGap"] = 1e-4
@@ -1086,9 +1082,9 @@ model = pyomo_mip_model_wrapper.get_mip_model()
 solution = {}
 def obj_funct(t):
 	# Сначала получаем нижнюю границу решения как решение NLP
-	res_nlp = mg_minlp.get_relaxed_solution(
+	res_nlp = mg_opt.get_relaxed_solution(
 		opt_prob,
-		custom_linear_constraints=mg_minlp.linear_constraints(n=3, m=1, A=[[1, 0, 0]], bounds=mg_minlp.bounds(lb=[t[0]], ub=[t[0] + 1 - 1e-6]))
+		custom_linear_constraints=mg_opt.linear_constraints(n=3, m=1, A=[[1, 0, 0]], bounds=mg_opt.bounds(lb=[t[0]], ub=[t[0] + 1 - 1e-6]))
 	)
 	if res_nlp["success"] and res_nlp["constr_violation"] < 1e-6:
 		lower_bound = res_nlp["obj"]
