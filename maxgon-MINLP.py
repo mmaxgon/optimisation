@@ -97,12 +97,12 @@ opt_prob_lin = mg_opt.optimization_problem(decision_vars, objective_lin_fun, lin
 ####################################################################################################
 # Получение решения из описания opt_prob
 ####################################################################################################
-importlib.reload(mg_opt)
 sol = mg_opt.get_minlp_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
 print(sol)
 lin_sol = mg_opt.get_minlp_solution(opt_prob_lin, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
 print(lin_sol)
 
+importlib.reload(mg_opt)
 bb_sol = mg_opt.get_BB_solution(opt_prob, eps=1e-4)
 print(bb_sol)
 bb_lin_sol = mg_opt.get_BB_solution(opt_prob_lin, eps=1e-4)

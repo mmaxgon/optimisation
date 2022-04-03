@@ -853,9 +853,8 @@ def get_BB_solution(opt_prob, eps=1e-3):
 				global_vars["best_sol"] = x
 				print("best solution: " + str(global_vars["best_sol"]) + str(global_vars["best_obj"]))
 			return res
-		new_opt_probs = [p for p in split_optimization_problem(opt_prob, x)]
 		new_results = []
-		for new_opt_prob in new_opt_probs:
+		for new_opt_prob in split_optimization_problem(opt_prob, x):
 			print(new_opt_prob.dvars.bounds)
 			hash_bounds = hash(str(new_opt_prob.dvars.bounds))
 			if hash_bounds in global_vars["bounds_visited"]:
