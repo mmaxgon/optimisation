@@ -212,7 +212,7 @@ model = pyomo.ConcreteModel()
 model.X = pyomo.Var(domain=pyomo.Reals, bounds=(1, 10))
 model.Y = pyomo.Var(domain=pyomo.Reals, bounds=(0, 100))
 
-# флаг в каком из диапазоне находится X
+# флаг в каком из диапазонов находится X
 model.b = pyomo.Var(ix, domain=pyomo.Binary)
 
 # Пары l[2*i], l[2*i+1], в сумме дающие b[i]:

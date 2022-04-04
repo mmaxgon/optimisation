@@ -837,6 +837,16 @@ def get_BB_solution(opt_prob, eps=1e-3):
 				nonlinear_constraints=opt_prob.nonlinear_constraints
 			)
 
+	def go_down(*prob_vars):
+		new_opt_prob, global_vars = prob_vars[0]
+		print(new_opt_prob.dvars.bounds)
+		hash_bounds = hash(str(new_opt_prob.dvars.bounds))
+		if hash_bounds in global_vars["bounds_visited"]:
+			return None
+		global_vars["bounds_visited"].append(hash_bounds)
+		new_res = get_BB_solution_internal(new_opt_prob, global_vars)
+		return new_res
+			
 	def get_BB_solution_internal(opt_prob, global_vars):
 		res = get_relaxed_solution(opt_prob)
 		if not(res["success"] and res["constr_violation"] <= 1e-6):
@@ -853,17 +863,10 @@ def get_BB_solution(opt_prob, eps=1e-3):
 				global_vars["best_sol"] = x
 				print("best solution: " + str(global_vars["best_sol"]) + str(global_vars["best_obj"]))
 			return res
-		new_results = []
-		for new_opt_prob in split_optimization_problem(opt_prob, x):
-			print(new_opt_prob.dvars.bounds)
-			hash_bounds = hash(str(new_opt_prob.dvars.bounds))
-			if hash_bounds in global_vars["bounds_visited"]:
-				continue
-			global_vars["bounds_visited"].append(hash_bounds)
-			new_res = get_BB_solution_internal(new_opt_prob, global_vars)
-			if new_res is None:
-				continue
-			new_results.append(new_res)
+		
+		new_probs = [(new_opt_prob, global_vars) for new_opt_prob in split_optimization_problem(opt_prob, x)]
+		new_results = list(map(go_down, new_probs))
+		new_results = [r for r in new_results if r is not None]
 		if len(new_results) == 0:
 			return None
 		elif len(new_results) == 1:
