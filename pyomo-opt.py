@@ -212,24 +212,17 @@ model = pyomo.ConcreteModel()
 model.X = pyomo.Var(domain=pyomo.Reals, bounds=(1, 10))
 model.Y = pyomo.Var(domain=pyomo.Reals, bounds=(0, 100))
 
-# флаг в каком диапазоне находится X
+# флаг в каком из диапазоне находится X
 model.b = pyomo.Var(ix, domain=pyomo.Binary)
-# пары l[2*i], l[2*i+1], в сумме дающие b[i]:
-# коэффициенты выпуклой комбинации для X и Y между соседними точками активного диапазона
+
+# Пары l[2*i], l[2*i+1], в сумме дающие b[i]:
+# Представляют собой коэффициенты выпуклой комбинации для соседних точек X и Y активного диапазона
 # x[i] = l[2*i] * xdata[i] + l[2*i+1] * xdata[i+1],
 # y[i] = l[2*i] * ydata[i] + l[2*i+1] * ydata[i+1]
 model.l = pyomo.Var(ix2, domain=pyomo.NonNegativeReals, bounds=(0, 1))
 
-model.b_cons = pyomo.ConstraintList()
-model.b_cons.clear()
-# х находится только в одном диапазоне:
-model.b_cons.add(expr = sum(model.b[i] for i in ix) == 1)
-for i in ix:
-	# если b[i] = 1, то xdata[i] <= x <= xdata[i+1]
-	expr = -NBIG*(1 - model.b[i]) + (xdata[i] - model.X) <= 0
-	model.b_cons.add(expr)
-	expr = -NBIG*(1 - model.b[i]) + (model.X - xdata[i+1]) <= 0
-	model.b_cons.add(expr)
+# только один b[i] = 1, и в этом диапазоне находится x:
+model.b_cons = pyomo.Constraint(expr = sum(model.b[i] for i in ix) == 1)
 model.b_cons.pprint()
 
 # x и y являются выпуклой комбинацией соседних точек с коэффициентами l[2*i] и l[2*i+1]
@@ -239,7 +232,7 @@ model.l_cons.clear()
 model.l_cons.add(expr = model.X == sum(xdata[i]*model.l[2*i] + xdata[i+1]*model.l[2*i+1] for i in ix))
 model.l_cons.add(expr = model.Y == sum(ydata[i]*model.l[2*i] + ydata[i+1]*model.l[2*i+1] for i in ix))
 for i in ix:
-	# только 2 соседних коэффициента l[2*i] и l[2*i+1] отличны от 0 и определяются сотв. диапазоном b[i]
+	# только 2 соседних коэффициента l[2*i] и l[2*i+1] отличны от 0 (дают в сумме 1) и определяются сотв. диапазоном b[i]
 	expr = model.l[2*i] + model.l[2*i+1] == model.b[i]
 	model.l_cons.add(expr)
 model.l_cons.pprint()
