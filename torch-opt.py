@@ -75,7 +75,7 @@ for i in range(int(1e3)):
 	opt.step()
 	print("data: {0}".format(x.data))
 	print("gradient: {0}".format(x.grad))
-u = (u + torch.relu(penalty*ineq_cons_fun(x) + u)).clone().detach()
+u = torch.relu(penalty*ineq_cons_fun(x) + u).clone().detach()
 v = (v + penalty*eq_cons_fun(x)).clone().detach()
 print(u, v)
 
@@ -90,7 +90,9 @@ print(z)
 
 def collect_x(y, z):
 	print(y, z)
-	z_1 = torch.nn.functional.gumbel_softmax(z, dim=1, hard=True)
+	# z_1 = torch.nn.functional.gumbel_softmax(z, dim=1, tau=1e-2, hard=False)
+	z_0 = torch.exp(7 * z)
+	z_1 = torch.matmul(torch.diag(1 / torch.sum(z_0, dim=1)), z_0)
 	print(z_1)
 	z_2 = torch.matmul(c, torch.t(z_1))
 	print(z_2)
@@ -110,6 +112,6 @@ for i in range(int(1e3)):
 	opt.step()
 	print("data: {0}".format(x.data))
 	print("gradient: {0}{1}".format(y.grad, z.grad))
-u = (u + torch.relu(penalty*ineq_cons_fun(x) + u)).clone().detach()
+u = torch.relu(penalty*ineq_cons_fun(x) + u).clone().detach()
 v = (v + penalty*eq_cons_fun(x)).clone().detach()
 print(u, v)
