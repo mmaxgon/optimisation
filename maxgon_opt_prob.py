@@ -535,7 +535,7 @@ def get_feasible_solution2(opt_prob, x_nlp):
 		print("NLP: " + str(x_nlp))
 
 ####################################################################################################
-# Решение простой MINLP задачи с помощью pyomo+cbc на основании описания задачи в виде optimization_problem
+# Polyhedral Outer Approximation (pyomo+cbc)
 ####################################################################################################
 # случайные точки внутри диапазона
 def generate_x(opt_prob):
@@ -547,7 +547,7 @@ def generate_x(opt_prob):
 		x.append(res)
 	return x
 	
-def get_minlp_solution(
+def get_POA_solution(
 	opt_prob,                       # описание задачи
 	obj_tolerance=1e-6,             # разница между upper_bound и lower_bound
 	if_nlp_lower_bound=False,       # нужно ли рассчитывать нижнюю границу NLP-задачи в начале
@@ -768,9 +768,8 @@ def get_minlp_solution(
 		print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
 
 ####################################################################################################
-# Branch and Bound
+# Branch and Bound (scipy.optimize)
 ####################################################################################################
-
 def get_BB_solution(opt_prob, eps=1e-3):
 	global_vars = {
 		"best_sol" : None,
@@ -837,8 +836,9 @@ def get_BB_solution(opt_prob, eps=1e-3):
 				nonlinear_constraints=opt_prob.nonlinear_constraints
 			)
 
-	def go_down(*prob_vars):
-		new_opt_prob, global_vars = prob_vars[0]
+	def go_down(new_opt_prob, global_vars):
+		# def go_down(*prob_vars):
+		# 	new_opt_prob, global_vars = prob_vars[0]
 		print(new_opt_prob.dvars.bounds)
 		hash_bounds = hash(str(new_opt_prob.dvars.bounds))
 		if hash_bounds in global_vars["bounds_visited"]:
@@ -864,8 +864,9 @@ def get_BB_solution(opt_prob, eps=1e-3):
 				print("best solution: " + str(global_vars["best_sol"]) + str(global_vars["best_obj"]))
 			return res
 		
-		new_probs = [(new_opt_prob, global_vars) for new_opt_prob in split_optimization_problem(opt_prob, x)]
-		new_results = list(map(go_down, new_probs))
+		# new_probs = [(new_opt_prob, global_vars) for new_opt_prob in split_optimization_problem(opt_prob, x)]
+		# new_results = list(map(go_down, new_probs))
+		new_results = list(map(lambda new_opt_prob: go_down(new_opt_prob, global_vars), split_optimization_problem(opt_prob, x)))
 		new_results = [r for r in new_results if r is not None]
 		if len(new_results) == 0:
 			return None
