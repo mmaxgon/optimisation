@@ -78,3 +78,38 @@ for i in range(int(1e3)):
 u = (u + torch.relu(penalty*ineq_cons_fun(x) + u)).clone().detach()
 v = (v + penalty*eq_cons_fun(x)).clone().detach()
 print(u, v)
+
+##########################################################################
+# Целочисленные ограничения
+##########################################################################
+c = torch.tensor([0., 1., 2., 3])
+y = torch.tensor([0.], requires_grad=True)
+print(y)
+z = torch.rand((2, 4), requires_grad=True)
+print(z)
+
+def collect_x(y, z):
+	print(y, z)
+	z_1 = torch.nn.functional.gumbel_softmax(z, dim=1, hard=True)
+	print(z_1)
+	z_2 = torch.matmul(c, torch.t(z_1))
+	print(z_2)
+	x = torch.cat([y, z_2])
+	print(x)
+	return x
+
+v = torch.tensor([0.]*k)
+u = torch.tensor([0.]*m)
+opt = torch.optim.Adam([y, z], lr=0.1)
+for i in range(int(1e3)):
+	x = collect_x(y, z)
+	val = goal(x)
+	print("goal: {0}, objective: {1}".format(val.data.item(), obj(x)))
+	opt.zero_grad()
+	val.backward()
+	opt.step()
+	print("data: {0}".format(x.data))
+	print("gradient: {0}{1}".format(y.grad, z.grad))
+u = (u + torch.relu(penalty*ineq_cons_fun(x) + u)).clone().detach()
+v = (v + penalty*eq_cons_fun(x)).clone().detach()
+print(u, v)

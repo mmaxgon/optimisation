@@ -95,22 +95,6 @@ opt_prob_cp = mg_opt.optimization_problem(decision_vars, objective_fun, lin_cons
 opt_prob_lin = mg_opt.optimization_problem(decision_vars, objective_lin_fun, lin_cons, None)
 
 ####################################################################################################
-# Получение решения из описания opt_prob
-####################################################################################################
-# POA
-sol = mg_opt.get_POA_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
-print(sol)
-lin_sol = mg_opt.get_POA_solution(opt_prob_lin, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
-print(lin_sol)
-# BB
-bb_sol = mg_opt.get_BB_solution(opt_prob, eps=1e-4)
-print(bb_sol)
-bb_lin_sol = mg_opt.get_BB_solution(opt_prob_lin, eps=1e-4)
-print(bb_lin_sol)
-####################################################################################################
-# Получение решения из описаний на различных фреймворках
-####################################################################################################
-####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
 # Нижняя граница как решение NLP-задачи
@@ -119,6 +103,33 @@ print(res_LP)
 res_NLP = mg_opt.get_relaxed_solution(opt_prob)
 print(res_NLP)
 nlp_lower_bound = res_NLP["obj"]
+
+####################################################################################################
+# Получение допустимого решения как приближения непрерывного
+####################################################################################################
+init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP["x"])
+print(init_feasible1)
+init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076, 2.48721229])
+print(init_feasible1)
+init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP["x"])
+print(init_feasible2)
+
+####################################################################################################
+# Получение решения из описания opt_prob
+####################################################################################################
+# POA
+sol = mg_opt.get_POA_solution(opt_prob, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
+print(sol)
+lin_sol = mg_opt.get_POA_solution(opt_prob_lin, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
+print(lin_sol)
+
+# BB
+bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4)
+print(bb_sol)
+bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, upper_bound=init_feasible2["obj"])
+print(bb_sol)
+bb_lin_sol = mg_opt.get_BB_solution(opt_prob_lin, int_eps=1e-4)
+print(bb_lin_sol)
 
 ####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
@@ -135,12 +146,8 @@ scipy_projector_optimizer_obj = mg_opt.scipy_projector_optimizer(opt_prob)
 # print(project)
 
 ####################################################################################################
-# Получение допустимого решения как приближения непрерывного
+# Получение решения из описаний на различных фреймворках
 ####################################################################################################
-init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP["x"])
-init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076, 2.48721229])
-init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP["x"])
-
 ##############################################################################
 # Задача как MILP Pyomo
 ##############################################################################

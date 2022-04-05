@@ -512,7 +512,7 @@ def get_feasible_solution2(opt_prob, x_nlp):
 			np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) <= np.array(opt_prob.nonlinear_constraints.bounds.ub)) and \
 			np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) >= np.array(opt_prob.nonlinear_constraints.bounds.lb))
 		):
-			return x_milp
+			return {"obj": opt_prob.objective.fun(x_milp), "x": x_milp}
 		dist = np.sqrt(sum((x_nlp[i] - x_milp[i])**2 for i in range(opt_prob.dvars.n)))
 		print(dist)
 		if dist >= prev_dist:
@@ -770,14 +770,14 @@ def get_POA_solution(
 ####################################################################################################
 # Branch and Bound (scipy.optimize)
 ####################################################################################################
-def get_BB_solution(opt_prob, eps=1e-3):
+def get_BB_solution(opt_prob, int_eps=1e-3, upper_bound=np.inf):
 	global_vars = {
 		"best_sol" : None,
-		"best_obj" : np.inf,
+		"best_obj" : upper_bound,
 		"bounds_visited" : []
 	}
 
-	def if_integer_feasible(opt_prob, x, eps=eps):
+	def if_integer_feasible(opt_prob, x, eps=int_eps):
 		if (opt_prob.dvars.ix_int is None) or (len(opt_prob.dvars.ix_int) == 0):
 			return True
 		x_int = x[opt_prob.dvars.ix_int]
@@ -850,11 +850,13 @@ def get_BB_solution(opt_prob, eps=1e-3):
 	def get_BB_solution_internal(opt_prob, global_vars):
 		res = get_relaxed_solution(opt_prob)
 		if not(res["success"] and res["constr_violation"] <= 1e-6):
+			print("NO NLP")
 			return None
 		print(res)
 		x = res["x"]
 		obj = res["obj"]
 		if obj >= global_vars["best_obj"]:
+			print("SKIP")
 			return None
 		if if_integer_feasible(opt_prob, x):
 			print("feasible")
