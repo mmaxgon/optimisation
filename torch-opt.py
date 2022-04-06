@@ -58,7 +58,7 @@ for i in range(int(1e3)):
 	if alpha < 1e-9:
 		break
 	x = x - alpha * x.grad
-u = (u + torch.relu(penalty*ineq_cons_fun(x) + u)).clone().detach()
+u = torch.relu(u + penalty*ineq_cons_fun(x)).clone().detach()
 v = (v + penalty*eq_cons_fun(x)).clone().detach()
 print(u, v)
 
@@ -75,7 +75,7 @@ for i in range(int(1e3)):
 	opt.step()
 	print("data: {0}".format(x.data))
 	print("gradient: {0}".format(x.grad))
-u = torch.relu(penalty*ineq_cons_fun(x) + u).clone().detach()
+u = torch.relu(u + penalty*ineq_cons_fun(x)).clone().detach()
 v = (v + penalty*eq_cons_fun(x)).clone().detach()
 print(u, v)
 
@@ -112,6 +112,6 @@ for i in range(int(1e3)):
 	opt.step()
 	print("data: {0}".format(x.data))
 	print("gradient: {0}{1}".format(y.grad, z.grad))
-u = torch.relu(penalty*ineq_cons_fun(x) + u).clone().detach()
+u = torch.relu(u + penalty*ineq_cons_fun(x)).clone().detach()
 v = (v + penalty*eq_cons_fun(x)).clone().detach()
 print(u, v)
