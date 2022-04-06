@@ -38,8 +38,8 @@ u = torch.tensor([0.]*m)
 
 def goal(x):
 	return obj(x) + \
-	       (1/(2*penalty)) * \
-	       (torch.sum(torch.relu(penalty*ineq_cons_fun(x) + u)**2) + torch.sum((penalty*eq_cons_fun(x) + v)**2))
+		(1/(2*penalty)) * \
+		(torch.sum(torch.relu(penalty*ineq_cons_fun(x) + u)**2) + torch.sum((penalty*eq_cons_fun(x) + v)**2))
 print(goal(x))
 
 # CUSTOM Armijo
@@ -91,7 +91,7 @@ print(z)
 def collect_x(y, z):
 	print(y, z)
 	# z_1 = torch.nn.functional.gumbel_softmax(z, dim=1, tau=1e-2, hard=False)
-	z_0 = torch.exp(7 * z)
+	z_0 = torch.exp(10 * z)
 	z_1 = torch.matmul(torch.diag(1 / torch.sum(z_0, dim=1)), z_0)
 	print(z_1)
 	z_2 = torch.matmul(c, torch.t(z_1))

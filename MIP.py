@@ -33,7 +33,7 @@ model_mip.objective = mip.minimize(model_mip.y[0])
 
 res = model_mip.optimize()
 
-if res.value == res.INFEASIBLE:
+if res.value == res.INFEASIBLE.value:
 	print("No solution!")
 else:
 	if len(model_mip.objective.expr.values()) > 0:

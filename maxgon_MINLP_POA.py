@@ -246,7 +246,7 @@ class mip_MIP_model_wrapper:
 
 	def solve(self):
 		res = self.__mip_MIP_model.optimize()
-		if res.value == res.INFEASIBLE:
+		if res.value == res.INFEASIBLE.value:
 			return False
 		return True
 	

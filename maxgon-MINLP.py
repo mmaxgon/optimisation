@@ -43,7 +43,7 @@ importlib.reload(mg_opt)
 # Начальное значение
 x0 = [1.75, 3, 0]
 # Переменные решения
-decision_vars = mg_opt.dvars(3, [1, 2], [0], mg_opt.bounds([0, 0, 0], [10, 10, 10]), x0)
+decision_vars = mg_opt.dvars(n=3, ix_int=[1, 2], ix_cont=[0], bounds=mg_opt.bounds([0, 0, 0], [10, 10, 10]), x0=x0)
 
 # Целевая функция
 def obj(x):
@@ -113,7 +113,9 @@ init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076
 print(init_feasible1)
 init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP["x"])
 print(init_feasible2)
-
+# НЕ РАБОТАЕТ
+# init_feasible3 = mg_opt.get_feasible_solution3(opt_prob, tau=10)
+# print(init_feasible3)
 ####################################################################################################
 # Получение решения из описания opt_prob
 ####################################################################################################

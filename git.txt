@@ -38,6 +38,7 @@ git add torch-opt.py
 git add scip-opt.py
 git add constraint-opt.py
 git add maxgon-MINLP.py
+git add maxgon_opt_prob_old.py
 git add maxgon_opt_prob.py
 git add maxgon_MINLP_POA.py
 git add maxgon-MINLP-BB.py

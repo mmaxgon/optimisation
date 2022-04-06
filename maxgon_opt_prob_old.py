@@ -2,7 +2,7 @@
 # Описание MINLP-задачи и решения простых проблем:
 # - последовательное округление
 # - последовательное приближение решений NLP и MILP
-# - POA с помощью mip и cbc
+# - POA с помощью pyomo и cbc
 # - свой BB
 ####################################################################################################
 # from collections import namedtuple
@@ -11,10 +11,8 @@ import itertools
 import copy
 import numpy as np
 import scipy.optimize as opt
-import mip as mip
+import pyomo.environ as pyomo
 
-# from torch import tensor
-# from torch.nn.functional import gumbel_softmax
 ####################################################################################################
 # Объекты абстрактного описания задачи
 ####################################################################################################
@@ -123,6 +121,7 @@ class optimization_problem:
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
+
 def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
 	if opt_prob.objective.if_linear and (opt_prob.nonlinear_constraints is None) and (custom_nonlinear_constraints is None):
 		# линейная задача
@@ -448,72 +447,65 @@ def get_feasible_solution2(opt_prob, x_nlp):
 	NLP_projector = scipy_projector_optimizer(opt_prob)
 
 	# MILP-описание задачи
-	model_milp = mip.Model(name="MIP", solver_name=mip.CBC)
+	model_milp = pyomo.ConcreteModel()
 	# целочисленные переменные решения
-	model_milp.x_int = [
-		model_milp.add_var(
-			name="x_int{0}".format(ix),
-			lb=opt_prob.dvars.bounds.lb[ix],
-			ub=opt_prob.dvars.bounds.ub[ix],
-			var_type=mip.INTEGER
-		) for ix in opt_prob.dvars.ix_int
-	]
+	model_milp.x_int = pyomo.Var(
+		opt_prob.dvars.ix_int,
+		domain=pyomo.Integers,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
 	# непрерывные переменные решения
-	model_milp.x_cont = [
-		model_milp.add_var(
-			name="x_cont{0}".format(ix),
-			lb=opt_prob.dvars.bounds.lb[ix],
-			ub=opt_prob.dvars.bounds.ub[ix],
-			var_type=mip.CONTINUOUS
-		) for ix in opt_prob.dvars.ix_cont
-	]
-	ix_cont = opt_prob.dvars.ix_cont
-	ix_int = opt_prob.dvars.ix_int
+	model_milp.x_cont = pyomo.Var(
+		[i for i in range(opt_prob.dvars.n) if i not in opt_prob.dvars.ix_int],
+		domain=pyomo.Reals,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
+	ix_cont = [i for i in model_milp.x_cont_index]
+	ix_int = [i for i in model_milp.x_int_index]
 	# все переменные решения
 	x_var = []
-	num_cont = 0
-	num_int = 0
 	for i in range(opt_prob.dvars.n):
 		if i in ix_cont:
-			x_var.append(model_milp.x_cont[num_cont])
-			num_cont += 1
+			x_var.append(model_milp.x_cont[i])
 		elif i in ix_int:
-			x_var.append(model_milp.x_int[num_int])
-			num_int += 1
+			x_var.append(model_milp.x_int[i])
 		else:
 			raise ValueError("Недопустимый индекс {0}!".format(i))
 	# линейные ограничения
-	lin_cons = []
+	model_milp.lin_cons = pyomo.ConstraintList()
 	if opt_prob.linear_constraints is not None:
 		for j in range(opt_prob.linear_constraints.m):
 			expr = np.matmul(opt_prob.linear_constraints.A[j], x_var)
 			if opt_prob.linear_constraints.bounds.ub[j] < np.Inf:
 				expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
-				lin_cons.append(model_milp.add_constr(expr1))
-			if opt_prob.linear_constraints.bounds.lb[j] > -np.Inf:
+				model_milp.lin_cons.add(expr1)
+			if opt_prob.linear_constraints.bounds.lb[j] > - np.Inf:
 				expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
-				lin_cons.append(model_milp.add_constr(expr2))
+				model_milp.lin_cons.add(expr2)
 	# вспомогательные ограничения при линеаризации
-	non_lin_cons = []
+	model_milp.non_lin_cons = pyomo.ConstraintList()
 	# ограничения цели
-	model_milp.mu = model_milp.add_var(name="mu", lb=0, ub=np.inf, var_type=mip.CONTINUOUS)
-	model_milp.objective = mip.minimize(objective=model_milp.mu)
-	obj_cons = []
+	model_milp.mu = pyomo.Var(domain=pyomo.NonNegativeReals)
+	model_milp.obj = pyomo.Objective(expr=model_milp.mu, sense=pyomo.minimize)
+	model_milp.obj_cons = pyomo.ConstraintList()
 	prev_dist = np.Inf
 
+	sf = pyomo.SolverFactory("cbc", executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe")
+	# sf = pyomo.SolverFactory("cbc")
 	while True:
 		# MILP итерация решения
-		model_milp.remove(obj_cons)
-		obj_cons.clear()
+		model_milp.obj_cons.clear()
 		# Функция цели - L1-расстояние до NLP-решения
 		for i in range(opt_prob.dvars.n):
-			obj_cons.append(model_milp.add_constr(x_var[i] - x_nlp[i] <= model_milp.mu))
-			obj_cons.append(model_milp.add_constr(x_var[i] - x_nlp[i] >= -model_milp.mu))
+			model_milp.obj_cons.add(x_var[i] - x_nlp[i] <= model_milp.mu)
+			model_milp.obj_cons.add(x_var[i] - x_nlp[i] >= -model_milp.mu)
 		# решаем: находим самое близкое MILP-решение к NLP-решению
-		result = model_milp.optimize()
-		if result.value == result.INFEASIBLE.value:
+		result = sf.solve(model_milp, tee=False)
+		if result.Solver()["Termination condition"] == pyomo.TerminationCondition.infeasible:
 			raise ValueError("Не найдено MILP-решение!")
-		x_milp = [x.x for x in x_var]
+		x_milp = [pyomo.value(x) for x in x_var]
 		print("MILP: " + str(x_milp))
 		# Если найденное решение удобвлетворяем нелинейным ограничениям, то возвращаем его
 		if (opt_prob.nonlinear_constraints is None) or (
@@ -534,7 +526,7 @@ def get_feasible_solution2(opt_prob, x_nlp):
 		for i in range(len(ix_violated)):
 			expr = gx[i] + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= 0
 			if str(expr) != "True":
-				non_lin_cons.append(model_milp.add_constr(expr))
+				model_milp.non_lin_cons.add(expr)
 
 		# итерация NLP-приближения к MILP-решению
 		nlp_projector = NLP_projector.get_solution(x_milp)
@@ -543,121 +535,8 @@ def get_feasible_solution2(opt_prob, x_nlp):
 		x_nlp = nlp_projector["x"]
 		print("NLP: " + str(x_nlp))
 
-"""
-Кодируем целочисленные переменные в вектора длины их диапазона - one-hot-encoding соответствующего целого числа.
-Для кодирования используем дифференцируемый вариант soft argmax - взвешиваем значения экспонентами.
-Из векторов кодировок умножая на [1,2,3,..] получаем целые числа, которые попадают во все ограничения и функцию цели.
-Решаем нелинейную задачу на получаемых векторах (один раз). Решение должно быть допустимым и целочисленным.
-Оно может быть неоптимальным потому что кодировка в one-hot-enc осуществляется невыпуклой функцией.
-"""
-# # НЕ РЕБОТАЕТ: получаем нецелочисленные решения из-за непрерывности soft argmax
-# def get_feasible_solution3(opt_prob, tau=1e1):
-# 	if (opt_prob.dvars.ix_int is None) or (len(opt_prob.dvars.ix_int) == 0):
-# 		return get_relaxed_solution(opt_prob)
-# 	# непрерывные переменные
-# 	x_cont = np.array([0.]*len(opt_prob.dvars.ix_cont), dtype=float)
-# 	# индексы непрерывных переменных
-# 	ix_cont = np.array(range(len(x_cont)))
-# 	# границы непрерывных переменных
-# 	lb_cont = opt_prob.dvars.bounds.lb[opt_prob.dvars.ix_cont]
-# 	ub_cont = opt_prob.dvars.bounds.ub[opt_prob.dvars.ix_cont]
-#
-# 	# целочисленные переменные - кодировки
-# 	x_int = []
-# 	for ix in opt_prob.dvars.ix_int:
-# 		lb = opt_prob.dvars.bounds.lb[ix]
-# 		ub = opt_prob.dvars.bounds.ub[ix]
-# 		length = ub - lb + 1
-# 		var_x = np.random.random(size=(length))
-# 		# var_x = np.ones((length))
-# 		x_int.append({"lb":lb, "ub":ub, "length":length, "var_x":var_x})
-# 	# индексы целочисленных переменных
-# 	ix_int = np.array(range(len(ix_cont), len(ix_cont) + sum(len(v["var_x"]) for v in x_int)))
-# 	# границы целочисленных переменных
-# 	lb_int = np.array([0.]*len(ix_int))
-# 	ub_int = np.array([1.]*len(ix_int))
-#
-# 	n = opt_prob.dvars.n
-# 	new_n = len(ix_cont) + len(ix_int)
-# 	new_x0 = np.concatenate([x_cont] + [v["var_x"] for v in x_int])
-# 	new_bounds = bounds(lb=np.concatenate([lb_cont, lb_int]), ub=np.concatenate([ub_cont, ub_int]))
-#
-# 	# one-hot-encoding
-# 	def soft_argmax(x):
-# 		t1 = np.exp(tau*x)
-# 		t2 = sum(t1)
-# 		t3 = t1 / t2
-# 		# t3 = gumbel_softmax(tensor(x), hard=True).numpy()
-# 		assert(np.real_if_close(sum(t3), 1))
-# 		return t3
-#
-# 	# собираем исходный вектор переменных решений из кодировок
-# 	def collect_x(z):
-# 		x = np.zeros((n))
-# 		x[opt_prob.dvars.ix_cont] = z[ix_cont]
-# 		curr_i = len(ix_cont)
-# 		for i in range(len(opt_prob.dvars.ix_int)):
-# 			length = x_int[i]["length"]
-# 			curr_x = z[curr_i:(curr_i+length)]
-# 			curr_x = soft_argmax(curr_x)
-# 			val_x = np.sum(np.multiply(np.array(range(length)), curr_x))
-# 			x[opt_prob.dvars.ix_int[i]] = val_x
-# 			curr_i += length
-# 		return x
-#
-# 	# значение линейной функции ограничений
-# 	def get_lin_cons(z):
-# 		x = collect_x(z)
-# 		val = np.matmul(opt_prob.linear_constraints.A, x)
-# 		res = np.concatenate([opt_prob.linear_constraints.bounds.lb - val, val - opt_prob.linear_constraints.bounds.ub])
-# 		return res
-#
-# 	def get_non_lin_cons(z):
-# 		x = collect_x(z)
-# 		val = opt_prob.nonlinear_constraints.fun(x)
-# 		return val
-#
-# 	def get_obj(z):
-# 		x = collect_x(z)
-# 		val = opt_prob.objective.fun(x)
-# 		return val
-#
-# 	results = {"obj": np.inf, "x": None, "constr_violation": None, "success": None}
-# 	def callback(xk, state):
-# 		if (state.fun < results["obj"]) and (state.constr_violation < 1e-6):
-# 			results["obj"] = state.fun
-# 			results["x"] = collect_x(state.x)
-# 			results["constr_violation"] = state.constr_violation
-# 		print(collect_x(xk))
-# 		return False
-#
-# 	# итоговая задача оптимизации
-# 	constraints = [
-# 		opt.NonlinearConstraint(
-# 			fun=get_lin_cons,
-# 			lb=-np.inf,
-# 			ub=0
-# 		),
-# 		opt.NonlinearConstraint(
-# 			fun=get_non_lin_cons,
-# 			lb=opt_prob.nonlinear_constraints.bounds.lb,
-# 			ub=opt_prob.nonlinear_constraints.bounds.ub
-# 		)
-# 	]
-# 	res = opt.minimize(
-# 		fun=get_obj,
-# 		bounds=opt.Bounds(new_bounds.lb, new_bounds.ub),
-# 		constraints=constraints,
-# 		x0=new_x0,
-# 		method="trust-constr",
-# 		callback=callback,
-# 		options={'verbose': 0, "maxiter": int(1e3)}
-# 	)
-# 	res = {"x": results["x"], "obj": results["obj"], "success": res.success, "constr_violation": results["constr_violation"]}
-# 	return res
-
 ####################################################################################################
-# Polyhedral Outer Approximation (mip+cbc)
+# Polyhedral Outer Approximation (pyomo+cbc)
 ####################################################################################################
 # случайные точки внутри диапазона
 def generate_x(opt_prob):
@@ -675,7 +554,8 @@ def get_POA_solution(
 	if_nlp_lower_bound=False,       # нужно ли рассчитывать нижнюю границу NLP-задачи в начале
 	if_refine=False,                # нужно ли после каждого MILP-решения фиксировать целочисленные переменные и уточнять непрерывные
 	if_project=False,               # нужно ли проецировать недопустимое решение на допустимое множество и строить касательные к нелинейным ограничениям в точке проекции
-	random_points_count=0           # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
+	random_points_count=0,          # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
+	cbc_executable_path="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe"
 ):
 	# добавление линейных ограничений в качестве касательных к нелинейной функции цели в точке x
 	def add_obj_constraints(x, dvar_x, fx=None):
@@ -683,9 +563,9 @@ def get_POA_solution(
 			fx = opt_prob.objective.fun(x)
 		gradf = opt.approx_fprime(x, opt_prob.objective.fun, epsilon=1e-9)
 		expr = fx + sum(gradf[j] * (dvar_x[j] - x[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
-		print(expr)
+		# print(expr)
 		if (str(expr) != "True"):
-			obj_cons.append(model_milp.add_constr(expr))
+			model_milp.obj_cons.add(expr)
 	
 	# добавление линейных ограничений в качестве касательных к нелинейным ограничениям в точке x
 	def add_nonlin_constraints(x, dvar_x, ix=None, gx=None):
@@ -707,9 +587,9 @@ def get_POA_solution(
 		ub = np.array(opt_prob.nonlinear_constraints.bounds.ub)[ix]
 		for i in range(len(ix)):
 			expr = gx[i] + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= ub[i]
-			print(expr)
+			# print(expr)
 			if (str(expr) != "True"):
-				non_lin_cons.append(model_milp.add_constr(expr))
+				model_milp.non_lin_cons.add(expr)
 	
 	# Рассчитываем решение NLP-задачи для получения нижней границы
 	if if_nlp_lower_bound:
@@ -725,58 +605,50 @@ def get_POA_solution(
 		scipy_projector_optimizer_obj = scipy_projector_optimizer(opt_prob)
 		
 	# MILP-описание задачи
-	model_milp = mip.Model(name="MIP_POA", solver_name=mip.CBC)
+	model_milp = pyomo.ConcreteModel()
 	# целочисленные переменные решения
-	model_milp.x_int = [
-		model_milp.add_var(
-			name="x_int{0}".format(ix),
-			lb=opt_prob.dvars.bounds.lb[ix],
-			ub=opt_prob.dvars.bounds.ub[ix],
-			var_type=mip.INTEGER
-		) for ix in opt_prob.dvars.ix_int
-	]
+	model_milp.x_int = pyomo.Var(
+		opt_prob.dvars.ix_int,
+		domain=pyomo.Integers,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
 	# непрерывные переменные решения
-	model_milp.x_cont = [
-		model_milp.add_var(
-			name="x_cont{0}".format(ix),
-			lb=opt_prob.dvars.bounds.lb[ix],
-			ub=opt_prob.dvars.bounds.ub[ix],
-			var_type=mip.CONTINUOUS
-		) for ix in opt_prob.dvars.ix_cont
-	]
-	# индексы для непрерывных и целочисленных переменных
-	ix_cont = opt_prob.dvars.ix_cont
-	ix_int = opt_prob.dvars.ix_int
+	model_milp.x_cont = pyomo.Var(
+		[i for i in range(opt_prob.dvars.n) if i not in opt_prob.dvars.ix_int],
+		domain=pyomo.Reals,
+		bounds=lambda model, i: (opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]),
+		initialize=lambda model, i: opt_prob.dvars.x0[i]
+	)
+	# индекси для непрерывных и целочисленных переменных
+	ix_cont = [i for i in model_milp.x_cont_index]
+	ix_int = [i for i in model_milp.x_int_index]
 	# все переменные решения
 	x_var = []
-	num_cont = 0
-	num_int = 0
 	for i in range(opt_prob.dvars.n):
 		if i in ix_cont:
-			x_var.append(model_milp.x_cont[num_cont])
-			num_cont += 1
+			x_var.append(model_milp.x_cont[i])
 		elif i in ix_int:
-			x_var.append(model_milp.x_int[num_int])
-			num_int += 1
+			x_var.append(model_milp.x_int[i])
 		else:
 			raise ValueError("Недопустимый индекс {0}!".format(i))
 	# линейные ограничения
-	lin_cons = []
+	model_milp.lin_cons = pyomo.ConstraintList()
 	if opt_prob.linear_constraints is not None:
 		for j in range(opt_prob.linear_constraints.m):
 			expr = np.matmul(opt_prob.linear_constraints.A[j], x_var)
 			if opt_prob.linear_constraints.bounds.ub[j] < np.Inf:
 				expr1 = expr <= opt_prob.linear_constraints.bounds.ub[j]
-				lin_cons.append(model_milp.add_constr(expr1))
+				model_milp.lin_cons.add(expr1)
 			if opt_prob.linear_constraints.bounds.lb[j] > -np.Inf:
 				expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
-				lin_cons.append(model_milp.add_constr(expr2))
+				model_milp.lin_cons.add(expr2)
 	# ограничения при линеаризации нелинейных ограничений
-	non_lin_cons = []
+	model_milp.non_lin_cons = pyomo.ConstraintList()
 	# ограничения при линеаризации нелинейной функции цели
-	obj_cons = []
+	model_milp.obj_cons = pyomo.ConstraintList()
 	# вспомогательная функция цели
-	model_milp.mu = model_milp.add_var(name="mu", lb=-np.inf, ub=np.inf, var_type=mip.CONTINUOUS)
+	model_milp.mu = pyomo.Var(domain=pyomo.Reals)
 	if opt_prob.objective.if_linear:
 		# должна быть задана линейная функция или список коэффициентов
 		assert((not (opt_prob.objective.lin_coeffs is None)) or (not (opt_prob.objective.fun is None)))
@@ -787,11 +659,11 @@ def get_POA_solution(
 			expr = opt_prob.objective.fun(x_var) <= model_milp.mu
 		else:
 			raise ValueError("Не задана функция цели или коэффициенты для линейной задачи")
-		obj_cons.append(model_milp.add_constr(lin_expr=opt_prob.objective.fun(x_var) <= model_milp.mu))
+		model_milp.obj_cons.add(expr=opt_prob.objective.fun(x_var) <= model_milp.mu)
 	else:
-		model_milp.temp_mu = model_milp.add_constr(lin_expr=model_milp.mu >= -1e9)
+		model_milp.temp_mu = pyomo.Constraint(expr=model_milp.mu >= -1e9)
 	# минимизируем вспомогательную переменную mu
-	model_milp.objective = mip.minimize(objective=model_milp.mu)
+	model_milp.obj = pyomo.Objective(expr=model_milp.mu, sense=pyomo.minimize)
 	
 	# начальные значения
 	# lower_bound = nlp_lower_bound if if_nlp_lower_bound else -np.Inf
@@ -804,6 +676,11 @@ def get_POA_solution(
 	upper_bound = np.Inf
 	best_sol = None
 	if_first_step = True
+	if cbc_executable_path is None:
+		sf = pyomo.SolverFactory("cbc")
+	else:
+		sf = pyomo.SolverFactory("cbc", executable=cbc_executable_path)
+
 	step_num = 0
 	
 	while True:
@@ -823,18 +700,18 @@ def get_POA_solution(
 			continue
 
 		# MILP итерация решения
-		result = model_milp.optimize()
-		if result.value == result.INFEASIBLE.value:
+		result = sf.solve(model_milp, tee=False, warmstart=True)
+		if result.Solver()["Termination condition"] == pyomo.TerminationCondition.infeasible:
 			raise ValueError("Не найдено MILP-решение!")
 		# После первого шага удаляем временное ограничение на функцию цели снизу
 		if if_first_step and not opt_prob.objective.if_linear:
 			if_first_step = False
-			model_milp.remove([model_milp.temp_mu])
+			model_milp.del_component(model_milp.temp_mu)
 		# значения переменных решения
-		x_milp = [x.x for x in x_var]
+		x_milp = list(map(pyomo.value, x_var))
 		print("MILP: " + str(x_milp))
 		# значение целевой функции вспомогательной задачи
-		obj = model_milp.objective_value
+		obj = model_milp.mu.value
 		if obj < prev_obj:
 			raise ValueError("Значение целевой функции вспомогательной задачи не может уменьшаться!")
 		prev_obj = obj
@@ -874,7 +751,7 @@ def get_POA_solution(
 			if (lower_bound > upper_bound):
 				raise ValueError("lower_bound > upper_bound!")
 			if (upper_bound - lower_bound < obj_tolerance):
-				res = {"obj": upper_bound, "x": best_sol, "step_num": step_num-random_points_count, "nonlin_constr_num": len(non_lin_cons), "objective_constr_num": len(obj_cons)}
+				res = {"obj": upper_bound, "x": best_sol, "step_num": step_num-random_points_count, "nonlin_constr_num": len(model_milp.non_lin_cons), "objective_constr_num": len(model_milp.obj_cons)}
 				print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
 				return res
 		else:
