@@ -965,11 +965,18 @@ def get_BB_solution(opt_prob, int_eps=1e-3, upper_bound=np.inf):
 		# def go_down(*prob_vars):
 		# 	new_opt_prob, global_vars = prob_vars[0]
 		print(new_opt_prob.dvars.bounds)
-		hash_bounds = hash(str(new_opt_prob.dvars.bounds))
-		if hash_bounds in global_vars["bounds_visited"]:
+		if_visited = False
+		new_lb = new_opt_prob.dvars.bounds.lb
+		new_ub = new_opt_prob.dvars.bounds.ub
+		for b in global_vars["bounds_visited"]:
+			if np.all(new_lb >= b.lb) and np.all(new_ub <= b.ub):
+				if_visited = True
+				break
+		if if_visited:
+			print("VISITED")
 			return None
-		global_vars["bounds_visited"].append(hash_bounds)
 		new_res = get_BB_solution_internal(new_opt_prob, global_vars)
+		global_vars["bounds_visited"].append(new_opt_prob.dvars.bounds)
 		return new_res
 			
 	def get_BB_solution_internal(opt_prob, global_vars):
