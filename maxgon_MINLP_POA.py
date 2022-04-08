@@ -6,10 +6,62 @@
 import copy
 import numpy as np
 import scipy.optimize as opt
+
+####################################################################################################
+# Интерфейс класса-обёртки для различных фреймворков
+####################################################################################################
+class model_wrapper:
+	# возвращаем модель
+	def get_mip_model(self):
+		raise NotImplementedError("get_mip_model")
+
+	# возвращаем число аппроксимаций функции цели
+	def get_object_cuts_num(self):
+		raise NotImplementedError("get_object_cuts_num")
+
+	# возвращаем число аппроксимаций нелинейных ограничений
+	def get_non_lin_constr_cuts_num(self):
+		raise NotImplementedError("get_non_lin_constr_cuts_num")
+
+	# удаляем временные ограничения
+	def del_temp_constr(self):
+		raise NotImplementedError("del_temp_constr")
+
+	# задана ли функция цели в оптимизационной задаче (или она внешняя)
+	def if_objective_defined(self):
+		raise NotImplementedError("if_objective_defined")
+
+	# значение целевой функции
+	def get_objective_value(self):
+		raise NotImplementedError("get_objective_value")
+
+	# значения переменных решения
+	def get_values(self, xvars):
+		raise NotImplementedError("get_values")
+
+	# очищаем аппроксимационные и пользовательские ограничения
+	def clear(self):
+		raise NotImplementedError("clear")
+
+	# добавляем линеаризованные ограничения на функцию цели
+	def add_obj_constr(self, fx, gradf, xgradf, xvars):
+		raise NotImplementedError("add_obj_constr")
+
+	# добавляем линеаризованные ограничения на нарушенные ограничения
+	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
+		raise NotImplementedError("add_non_lin_constr")
+
+	# добавляем дополнительное пользовательское ограничения
+	def add_custom_constr(self, expr):
+		raise NotImplementedError("add_custom_constr")
+
+	# получаем MIP-решение
+	def solve(self):
+		raise NotImplementedError("solve")
 ####################################################################################################
 # Обёртка PYOMO
 ####################################################################################################
-class pyomo_MIP_model_wrapper:
+class pyomo_MIP_model_wrapper(model_wrapper):
 	def __init__(
 		self,
 		pyomo,                         # Объект pyomo.environ
@@ -135,7 +187,7 @@ class pyomo_MIP_model_wrapper:
 ####################################################################################################
 # Обёртка MIP
 ####################################################################################################
-class mip_MIP_model_wrapper:
+class mip_MIP_model_wrapper(model_wrapper):
 	def __init__(
 		self,
 		mip_object,                     # mip из import mip as mip
@@ -253,7 +305,7 @@ class mip_MIP_model_wrapper:
 ####################################################################################################
 # Обёртка GOOGLE ORTOOLS CP_SAT
 ####################################################################################################
-class ortools_cp_sat_MIP_model_wrapper:
+class ortools_cp_sat_MIP_model_wrapper(model_wrapper):
 	def __init__(
 		self,
 		ortools_cp_model,              # Объект ortools.sat.python.cp_model
@@ -351,7 +403,7 @@ class ortools_cp_sat_MIP_model_wrapper:
 ####################################################################################################
 # Обёртка GOOGLE ORTOOLS LINEAR SOLVER (SCIP/CBC)
 ####################################################################################################
-class ortools_linear_solver_MIP_model_wrapper:
+class ortools_linear_solver_MIP_model_wrapper(model_wrapper):
 	def __init__(
 		self,
 		milp_ortools_solver,                # Объект ortools.linear_solver.pywraplp.Solver.CreateSolver('SCIP')
@@ -459,7 +511,7 @@ class ortools_linear_solver_MIP_model_wrapper:
 ####################################################################################################
 # Обёртка IBM CPLEX MP и CP
 ####################################################################################################
-class cplex_MIP_model_wrapper:
+class cplex_MIP_model_wrapper(model_wrapper):
 	def __init__(
 		self,
 		model_cplex              # Модель MIP docplex.mp.model.Model() или docplex.cp.model.CpoModel() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
@@ -577,7 +629,7 @@ class cplex_MIP_model_wrapper:
 ####################################################################################################
 # Обёртка GEKKO
 ####################################################################################################
-class gekko_MIP_model_wrapper:
+class gekko_MIP_model_wrapper(model_wrapper):
 	def __init__(
 		self,
 		model_gekko,  # Модель MIP GEKKO() со всеми переменными решения и только ограничениями и/или функцией цели, которые могут быть описаны символьно
