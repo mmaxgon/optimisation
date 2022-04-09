@@ -13,6 +13,13 @@ def do_armijo_step(x0, fx0, gradx0, goal_func):
 		fxn = goal(xn).data.item()
 	return alpha
 ###################################################################
+def max0(x, if_diff=True):
+	if if_diff:
+		res = torch.nn.functional.softplus(x, beta=1e3, threshold = 1e-1)
+	else:
+		res = torch.relu(x)
+	return res
+###################################################################
 n = 3 # число переменных
 m = 2 # число ограничений-неравенств
 k = 1 # число ограничений-равенств
@@ -40,7 +47,7 @@ def goal(x):
 	return obj(x) + \
 		(1/(2*penalty)) * \
 		(
-			torch.sum(torch.relu(penalty * ineq_cons_fun(x) + u)**2) +
+			torch.sum(max0(penalty * ineq_cons_fun(x) + u)**2) +
 			torch.sum((penalty * eq_cons_fun(x) + v)**2)
 	    )
 print(goal(x))

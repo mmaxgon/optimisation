@@ -175,11 +175,12 @@ class pyomo_MIP_model_wrapper(model_wrapper):
 		self.__pyomo_MIP_model.__custom_cons.add(expr)
 
 	def solve(self):
-		if self.__mip_solver_name.upper() in ["CBC", "CPLEX"]:
-			print("warm start")
-			results = self.__mip_solver.solve(self.__pyomo_MIP_model, warmstart=True, tee=False)
-		else:
-			results = self.__mip_solver.solve(self.__pyomo_MIP_model, tee=False)
+		results = self.__mip_solver.solve(self.__pyomo_MIP_model, tee=False)
+		# if self.__mip_solver_name.upper() in ["CBC", "CPLEX"]:
+		# 	print("warm start")
+		# 	results = self.__mip_solver.solve(self.__pyomo_MIP_model, warmstart=True, tee=False)
+		# else:
+		# 	results = self.__mip_solver.solve(self.__pyomo_MIP_model, tee=False)
 		if results.Solver()["Termination condition"] == self.__pyomo.TerminationCondition.infeasible:
 			return False
 		return True

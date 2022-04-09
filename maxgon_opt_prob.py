@@ -11,6 +11,7 @@ import itertools
 import copy
 import numpy as np
 import scipy.optimize as opt
+import cyipopt
 import mip as mip
 
 # from torch import tensor
@@ -123,9 +124,15 @@ class optimization_problem:
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
-def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonlinear_constraints = None):
+def get_relaxed_solution(
+	opt_prob,
+	nlp_solver="SCIPY", # SCIPY или IPOPT
+	custom_linear_constraints=None,
+	custom_nonlinear_constraints=None
+):
+	assert(nlp_solver.upper() in ["SCIPY", "IPOPT"])
+	# линейная задача
 	if opt_prob.objective.if_linear and (opt_prob.nonlinear_constraints is None) and (custom_nonlinear_constraints is None):
-		# линейная задача
 		if not(custom_linear_constraints is None):
 			lin_cons = join_linear_constraints(opt_prob.linear_constraints, custom_linear_constraints)
 		else:
@@ -167,85 +174,122 @@ def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonl
 		print(res)
 		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": np.max(res.con)}
 		return res
-	
-	# нелинейная задача
-	constraints = [
-		opt.LinearConstraint(
-			opt_prob.linear_constraints.A,
-			opt_prob.linear_constraints.bounds.lb,
-			opt_prob.linear_constraints.bounds.ub
-		),
-		opt.NonlinearConstraint(
-			opt_prob.nonlinear_constraints.fun,
-			opt_prob.nonlinear_constraints.bounds.lb,
-			opt_prob.nonlinear_constraints.bounds.ub
-		)
-	]
-	if not(custom_linear_constraints is None):
-		constraints.append(
-			opt.LinearConstraint(
-				custom_linear_constraints.A,
-				custom_linear_constraints.bounds.lb,
-				custom_linear_constraints.bounds.ub
-			)
-		)
-	if not(custom_nonlinear_constraints is None):
-		constraints.append(
-			opt.NonlinearConstraint(
-				custom_nonlinear_constraints.fun,
-				custom_nonlinear_constraints.bounds.lb,
-				custom_nonlinear_constraints.bounds.ub
-			)
-		)
-	res = opt.minimize(
-		fun=opt_prob.objective.fun,
-		bounds=opt.Bounds(opt_prob.dvars.bounds.lb, opt_prob.dvars.bounds.ub),
-		constraints=constraints,
-		x0=opt_prob.dvars.x0,
-		method="trust-constr",
-		options={'verbose': 0, "maxiter": 200}
-	)
-	res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
-	return res
 
+	# нелинейная задача
+	if nlp_solver.upper() == "SCIPY":
+		constraints = [
+			opt.LinearConstraint(
+				opt_prob.linear_constraints.A,
+				opt_prob.linear_constraints.bounds.lb,
+				opt_prob.linear_constraints.bounds.ub
+			),
+			opt.NonlinearConstraint(
+				opt_prob.nonlinear_constraints.fun,
+				opt_prob.nonlinear_constraints.bounds.lb,
+				opt_prob.nonlinear_constraints.bounds.ub
+			)
+		]
+		if not(custom_linear_constraints is None):
+			constraints.append(
+				opt.LinearConstraint(
+					custom_linear_constraints.A,
+					custom_linear_constraints.bounds.lb,
+					custom_linear_constraints.bounds.ub
+				)
+			)
+		if not(custom_nonlinear_constraints is None):
+			constraints.append(
+				opt.NonlinearConstraint(
+					custom_nonlinear_constraints.fun,
+					custom_nonlinear_constraints.bounds.lb,
+					custom_nonlinear_constraints.bounds.ub
+				)
+			)
+		res = opt.minimize(
+			fun=opt_prob.objective.fun,
+			bounds=opt.Bounds(opt_prob.dvars.bounds.lb, opt_prob.dvars.bounds.ub),
+			constraints=constraints,
+			x0=opt_prob.dvars.x0,
+			method="trust-constr",
+			options={'verbose': 0, "maxiter": 200}
+		)
+		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+		return res
+	elif nlp_solver.upper() == "IPOPT":
+		class ipopt_prob:
+			def objective(self, x):
+				return opt_prob.objective.fun(x)
+			def gradient(self, x):
+				return opt.approx_fprime(x, self.objective, epsilon=1e-8)
+			def constraints(self, x):
+				return np.concatenate(
+					[np.matmul(opt_prob.linear_constraints.A, x),
+					opt_prob.nonlinear_constraints.fun(x)]
+				)
+			def jacobian(self, x):
+				return opt.slsqp.approx_jacobian(x, self.constraints, epsilon=1e-8)
+		cl = np.concatenate([opt_prob.linear_constraints.bounds.lb, opt_prob.nonlinear_constraints.bounds.lb])
+		cu = np.concatenate([opt_prob.linear_constraints.bounds.ub, opt_prob.nonlinear_constraints.bounds.ub])
+		nlp_prob = ipopt_prob()
+		nlp = cyipopt.Problem(
+			n=opt_prob.dvars.n,
+			m=opt_prob.linear_constraints.m + opt_prob.nonlinear_constraints.m,
+			problem_obj=nlp_prob,
+			lb=opt_prob.dvars.bounds.lb,
+			ub=opt_prob.dvars.bounds.ub,
+			cl=cl,
+			cu=cu,
+		)
+		nlp.add_option('tol', 1e-4)
+		nlp.add_option('print_level', 1)
+		x, res = nlp.solve(opt_prob.dvars.x0)
+		constr_violation = np.concatenate([cl-res["g"], res["g"]-cu])
+		constr_violation = constr_violation[constr_violation > 0]
+		if len(constr_violation) > 0:
+			cv = max(constr_violation)
+		else:
+			cv = 0
+		res = {
+			"x": res["x"],
+			"obj": res["obj_val"],
+			"success": res["status"]==0,
+			"constr_violation": cv
+		}
+		return res
 ####################################################################################################
 # Уточнение непрерывных компонент решения при фиксации целочисленных
 ####################################################################################################
 
 # Класс для уточнения непрерывных переменных решения при фиксации целочисленных
 # Нужен когда непрерывных переменных много: для уточнения верхней границы, для перевода решения в допустимую область
-class scipy_refiner_optimizer:
-	def __init__(self, opt_prob):
+class refiner_optimizer:
+	def __init__(self, opt_prob, nlp_solver="SCIPY"):
 		# сохраняем начальное описание задачи
 		self.__opt_prob = opt_prob
+		self.__nlp_solver = nlp_solver
 
 	# решение по непрерывным переменным
 	def get_solution(self, x0):
+		x0 = np.array(x0)
 		# фиксируем целочисленные переменные
 		lb = np.array(self.__opt_prob.dvars.bounds.lb)
 		ub = np.array(self.__opt_prob.dvars.bounds.ub)
-		lb[self.__opt_prob.dvars.ix_int] = np.round(np.array(x0)[self.__opt_prob.dvars.ix_int])
-		ub[self.__opt_prob.dvars.ix_int] = np.round(np.array(x0)[self.__opt_prob.dvars.ix_int])
-		res = opt.minimize(
-			fun=self.__opt_prob.objective.fun,
-			bounds=opt.Bounds(lb, ub),
-			constraints=[
-				opt.LinearConstraint(
-					self.__opt_prob.linear_constraints.A,
-					self.__opt_prob.linear_constraints.bounds.lb,
-					self.__opt_prob.linear_constraints.bounds.ub
-				),
-				opt.NonlinearConstraint(
-					self.__opt_prob.nonlinear_constraints.fun,
-					self.__opt_prob.nonlinear_constraints.bounds.lb,
-					self.__opt_prob.nonlinear_constraints.bounds.ub
-				)
-			],
-			x0=x0,
-			method="trust-constr",
-			options={'verbose': 0, "maxiter": 200}
+		lb[self.__opt_prob.dvars.ix_int] = np.round(x0[self.__opt_prob.dvars.ix_int])
+		ub[self.__opt_prob.dvars.ix_int] = np.round(x0[self.__opt_prob.dvars.ix_int])
+		new_dvars = dvars(
+			n=self.__opt_prob.dvars.n,
+			ix_int=self.__opt_prob.dvars.ix_int,
+			ix_cont=self.__opt_prob.dvars.ix_cont,
+			bounds=bounds(lb=lb, ub=ub),
+			x0=x0
 		)
-		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+		new_opt_prob = optimization_problem(
+			dvars=new_dvars,
+			objective=self.__opt_prob.objective,
+			linear_constraints=self.__opt_prob.linear_constraints,
+			nonlinear_constraints=self.__opt_prob.nonlinear_constraints
+		)
+		res = get_relaxed_solution(new_opt_prob, nlp_solver=self.__nlp_solver)
 		return res
 
 ####################################################################################################
@@ -254,10 +298,11 @@ class scipy_refiner_optimizer:
 
 # Класс для проекции недопустимого решения на допустимую область с релаксацией целочисленности
 # Нужен для уменьшения итераций по линейной аппроксимации ограничений
-class scipy_projector_optimizer:
-	def __init__(self, opt_prob):
+class projector_optimizer:
+	def __init__(self, opt_prob, nlp_solver="SCIPY"):
 		# сохраняем начальное описание задачи
 		self.__opt_prob = opt_prob
+		self.__nlp_solver = nlp_solver
 
 	# Проецируем x на допустимую область
 	def get_solution(self, x0):
@@ -265,26 +310,19 @@ class scipy_projector_optimizer:
 		def proj_obj(x):
 			return sum((x[i] - x0[i]) ** 2 for i in range(self.__opt_prob.dvars.n))
 
-		res = opt.minimize(
+		new_objective = objective(
+			n=self.__opt_prob.objective.n,
+			if_linear=False,
 			fun=proj_obj,
-			bounds=opt.Bounds(self.__opt_prob.dvars.bounds.lb, self.__opt_prob.dvars.bounds.ub),
-			constraints=[
-				opt.LinearConstraint(
-					self.__opt_prob.linear_constraints.A,
-					self.__opt_prob.linear_constraints.bounds.lb,
-					self.__opt_prob.linear_constraints.bounds.ub
-				),
-				opt.NonlinearConstraint(
-					self.__opt_prob.nonlinear_constraints.fun,
-					self.__opt_prob.nonlinear_constraints.bounds.lb,
-					self.__opt_prob.nonlinear_constraints.bounds.ub
-				)
-			],
-			x0=x0,
-			method="trust-constr",
-			options={'verbose': 0, "maxiter": 200}
+			lin_coeffs=None
 		)
-		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
+		new_opt_prob = optimization_problem(
+			dvars=self.__opt_prob.dvars,
+			objective=new_objective,
+			linear_constraints=self.__opt_prob.linear_constraints,
+			nonlinear_constraints=self.__opt_prob.nonlinear_constraints
+		)
+		res = get_relaxed_solution(new_opt_prob, nlp_solver=self.__nlp_solver)
 		return res
 
 ####################################################################################################
@@ -300,7 +338,7 @@ class scipy_projector_optimizer:
 7. Если в обе стороны округления решение не найдено, идём по ветке вверх и меняем сторону округления там.
 Для бинарных переменных мы обязательно переберём все возможные варианты.
 """
-def get_feasible_solution1(opt_prob, x_nlp):
+def get_feasible_solution1(opt_prob, x_nlp, nlp_solver="SCIPY"):
 	bounds_lb = np.array(opt_prob.dvars.bounds.lb)
 	bounds_ub = np.array(opt_prob.dvars.bounds.ub)
 	ix_int = copy.copy(opt_prob.dvars.ix_int)
@@ -339,7 +377,7 @@ def get_feasible_solution1(opt_prob, x_nlp):
 			opt_prob.nonlinear_constraints
 		)
 		# Получаем новое NLP-решение
-		res = get_relaxed_solution(new_opt_prob)
+		res = get_relaxed_solution(new_opt_prob, nlp_solver=nlp_solver)
 		# Если допустимое решение нашли
 		if res["success"] and (res["constr_violation"] <= 1e-6):
 			print(res)
@@ -376,7 +414,7 @@ def get_feasible_solution1(opt_prob, x_nlp):
 				opt_prob.nonlinear_constraints
 			)
 			# Получаем новое NLP-решение
-			res = get_relaxed_solution(new_opt_prob)
+			res = get_relaxed_solution(new_opt_prob, nlp_solver=nlp_solver)
 			# если допустимое решение не найдено - идём наверх с пустым
 			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
 				return None
@@ -415,7 +453,7 @@ def get_feasible_solution1(opt_prob, x_nlp):
 				opt_prob.nonlinear_constraints
 			)
 			# Получаем новое NLP-решение
-			res = get_relaxed_solution(new_opt_prob)
+			res = get_relaxed_solution(new_opt_prob, nlp_solver=nlp_solver)
 			# если допустимое решение не найдено - идём наверх с пустым
 			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
 				return None
@@ -443,9 +481,9 @@ def get_feasible_solution1(opt_prob, x_nlp):
 3. Находим новое NLP-решение как самую близкую точку к решению MILP из 2.
 4. GOTO 2.
 """
-def get_feasible_solution2(opt_prob, x_nlp):
+def get_feasible_solution2(opt_prob, x_nlp, nlp_solver="SCIPY"):
 	# NLP-описание задачи (проектор)
-	NLP_projector = scipy_projector_optimizer(opt_prob)
+	NLP_projector = projector_optimizer(opt_prob, nlp_solver=nlp_solver)
 
 	# MILP-описание задачи
 	model_milp = mip.Model(name="MIP", solver_name=mip.CBC)
@@ -515,7 +553,7 @@ def get_feasible_solution2(opt_prob, x_nlp):
 			raise ValueError("Не найдено MILP-решение!")
 		x_milp = [x.x for x in x_var]
 		print("MILP: " + str(x_milp))
-		# Если найденное решение удобвлетворяем нелинейным ограничениям, то возвращаем его
+		# Если найденное решение удовлетворяет нелинейным ограничениям, то возвращаем его
 		if (opt_prob.nonlinear_constraints is None) or (
 			np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) <= np.array(opt_prob.nonlinear_constraints.bounds.ub)) and \
 			np.all(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) >= np.array(opt_prob.nonlinear_constraints.bounds.lb))
@@ -675,7 +713,8 @@ def get_POA_solution(
 	if_nlp_lower_bound=False,       # нужно ли рассчитывать нижнюю границу NLP-задачи в начале
 	if_refine=False,                # нужно ли после каждого MILP-решения фиксировать целочисленные переменные и уточнять непрерывные
 	if_project=False,               # нужно ли проецировать недопустимое решение на допустимое множество и строить касательные к нелинейным ограничениям в точке проекции
-	random_points_count=0           # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
+	random_points_count=0,          # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
+	nlp_solver="SCIPY"
 ):
 	# добавление линейных ограничений в качестве касательных к нелинейной функции цели в точке x
 	def add_obj_constraints(x, dvar_x, fx=None):
@@ -713,16 +752,16 @@ def get_POA_solution(
 	
 	# Рассчитываем решение NLP-задачи для получения нижней границы
 	if if_nlp_lower_bound:
-		res_NLP = get_relaxed_solution(opt_prob)
+		res_NLP = get_relaxed_solution(opt_prob, nlp_solver=nlp_solver)
 		if not (res_NLP["success"] and res_NLP["constr_violation"] <= 1e-6):
 			raise ValueError("Нет NLP-решения!")
 		nlp_lower_bound = res_NLP["obj"]
 	# Объект для уточнения непрерывных переменных решения при фиксации целочисленных
 	if if_refine:
-		scipy_refiner_optimizer_obj = scipy_refiner_optimizer(opt_prob)
+		refiner_optimizer_obj = refiner_optimizer(opt_prob, nlp_solver=nlp_solver)
 	# Объект проекции недопустимого решения на допустимое множество
 	if if_project:
-		scipy_projector_optimizer_obj = scipy_projector_optimizer(opt_prob)
+		projector_optimizer_obj = projector_optimizer(opt_prob, nlp_solver=nlp_solver)
 		
 	# MILP-описание задачи
 	model_milp = mip.Model(name="MIP_POA", solver_name=mip.CBC)
@@ -842,7 +881,7 @@ def get_POA_solution(
 
 		# фиксируем целочисленные переменные, оптимизируем по непрерывным
 		if if_refine:
-			refine = scipy_refiner_optimizer_obj.get_solution(x_milp)
+			refine = refiner_optimizer_obj.get_solution(x_milp)
 			if refine["success"] and refine["constr_violation"] < 1e-6:
 				x_refine = refine["x"]
 				print("Refined: {0}".format(x_refine))
@@ -880,7 +919,7 @@ def get_POA_solution(
 		else:
 			# проецируем решение вспомогательной задачи на допустимую область
 			if if_project:
-				project = scipy_projector_optimizer_obj.get_solution(x_milp)
+				project = projector_optimizer_obj.get_solution(x_milp)
 				if project["success"] and project["constr_violation"] < 1e-6:
 					x_project = project["x"]
 					print("Projected: {0}".format(x_project))
@@ -895,7 +934,12 @@ def get_POA_solution(
 ####################################################################################################
 # Branch and Bound (scipy.optimize)
 ####################################################################################################
-def get_BB_solution(opt_prob, int_eps=1e-3, upper_bound=np.inf):
+def get_BB_solution(
+	opt_prob,
+	int_eps=1e-3,
+	upper_bound=np.inf,
+	nlp_solver="SCIPY"
+):
 	global_vars = {
 		"best_sol" : None,
 		"best_obj" : upper_bound,
@@ -980,7 +1024,7 @@ def get_BB_solution(opt_prob, int_eps=1e-3, upper_bound=np.inf):
 		return new_res
 			
 	def get_BB_solution_internal(opt_prob, global_vars):
-		res = get_relaxed_solution(opt_prob)
+		res = get_relaxed_solution(opt_prob, nlp_solver)
 		if not(res["success"] and res["constr_violation"] <= 1e-6):
 			print("NO NLP")
 			return None

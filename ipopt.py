@@ -202,3 +202,64 @@ res.constr_violation
 
 objective(x0)
 objective(res.x)
+############################################################
+class prob:
+	def objective(self, x):
+		return -(1000 - x[0]**2 - 2*x[1]**2 - x[2]**2 - x[0]*x[1] - x[0]*x[2])
+
+	def gradient(self, x):
+		return sp.approx_fprime(x, self.objective, epsilon=1e-8)
+
+	def constraints(self, x):
+		return np.array([
+			8 * x[0] + 14 * x[1] + 7 * x[2],
+			x[0]**2 + x[1]**2 + x[2]**2 - 25,
+			x[1]**2 + x[2]**2 - 12
+		])
+
+	def jacobian(self, x):
+		return sp.slsqp.approx_jacobian(x, self.constraints, epsilon=1e-8)
+
+optprob = prob()
+
+x0 = [1, 2, 3]
+optprob.objective(x0)
+optprob.gradient(x0)
+optprob.constraints(x0)
+optprob.jacobian(x0)
+
+lb = [0.] * 3
+ub = [10.] * 3
+cl = [56., -np.inf, -np.inf]
+cu = [56., 10., 10.]
+
+nlp = cyipopt.Problem(
+	n = len(x0),
+	m = len(cl),
+	problem_obj = optprob,
+	lb = lb,
+	ub = ub,
+	cl = cl,
+	cu = cu,
+)
+# https://coin-or.github.io/Ipopt/OPTIONS.html
+nlp.add_option('tol', 1e-4)
+nlp.add_option('print_level', 1)
+
+start_time = time.time()
+x, info = nlp.solve(x0)
+print(time.time() - start_time)
+print(x)
+print(info["obj_val"])
+
+start_time = time.time()
+res = sp.minimize(
+	fun=optprob.objective,
+	bounds=sp.Bounds(lb, ub),
+	constraints=sp.NonlinearConstraint(optprob.constraints, cl, cu),
+	x0=x0,
+	method="trust-constr",
+	options={'verbose': 0, "maxiter": 200}
+)
+print(time.time() - start_time)
+print(res.x, x)

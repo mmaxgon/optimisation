@@ -213,7 +213,7 @@ def get_relaxed_solution(opt_prob, custom_linear_constraints = None, custom_nonl
 
 # Класс для уточнения непрерывных переменных решения при фиксации целочисленных
 # Нужен когда непрерывных переменных много: для уточнения верхней границы, для перевода решения в допустимую область
-class scipy_refiner_optimizer:
+class refiner_optimizer:
 	def __init__(self, opt_prob):
 		# сохраняем начальное описание задачи
 		self.__opt_prob = opt_prob
@@ -253,7 +253,7 @@ class scipy_refiner_optimizer:
 
 # Класс для проекции недопустимого решения на допустимую область с релаксацией целочисленности
 # Нужен для уменьшения итераций по линейной аппроксимации ограничений
-class scipy_projector_optimizer:
+class projector_optimizer:
 	def __init__(self, opt_prob):
 		# сохраняем начальное описание задачи
 		self.__opt_prob = opt_prob
@@ -444,7 +444,7 @@ def get_feasible_solution1(opt_prob, x_nlp):
 """
 def get_feasible_solution2(opt_prob, x_nlp):
 	# NLP-описание задачи (проектор)
-	NLP_projector = scipy_projector_optimizer(opt_prob)
+	NLP_projector = projector_optimizer(opt_prob)
 
 	# MILP-описание задачи
 	model_milp = pyomo.ConcreteModel()
@@ -599,10 +599,10 @@ def get_POA_solution(
 		nlp_lower_bound = res_NLP["obj"]
 	# Объект для уточнения непрерывных переменных решения при фиксации целочисленных
 	if if_refine:
-		scipy_refiner_optimizer_obj = scipy_refiner_optimizer(opt_prob)
+		refiner_optimizer_obj = refiner_optimizer(opt_prob)
 	# Объект проекции недопустимого решения на допустимое множество
 	if if_project:
-		scipy_projector_optimizer_obj = scipy_projector_optimizer(opt_prob)
+		projector_optimizer_obj = projector_optimizer(opt_prob)
 		
 	# MILP-описание задачи
 	model_milp = pyomo.ConcreteModel()
@@ -719,7 +719,7 @@ def get_POA_solution(
 
 		# фиксируем целочисленные переменные, оптимизируем по непрерывным
 		if if_refine:
-			refine = scipy_refiner_optimizer_obj.get_solution(x_milp)
+			refine = refiner_optimizer_obj.get_solution(x_milp)
 			if refine["success"] and refine["constr_violation"] < 1e-6:
 				x_refine = refine["x"]
 				print("Refined: {0}".format(x_refine))
@@ -757,7 +757,7 @@ def get_POA_solution(
 		else:
 			# проецируем решение вспомогательной задачи на допустимую область
 			if if_project:
-				project = scipy_projector_optimizer_obj.get_solution(x_milp)
+				project = projector_optimizer_obj.get_solution(x_milp)
 				if project["success"] and project["constr_violation"] < 1e-6:
 					x_project = project["x"]
 					print("Projected: {0}".format(x_project))
