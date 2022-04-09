@@ -3,11 +3,11 @@ import torch
 import copy
 ###################################################################
 def do_armijo_step(x0, fx0, gradx0, goal_func):
-	grad_norm = torch.norm(gradx0).data.item()
+	grad_norm2 = (sum(gradx0 ** 2)).data.item()
 	alpha = 1
 	xn = x0 - alpha * gradx0
 	fxn = goal(xn).data.item()
-	while np.isinf(fxn) or fx0 - fxn < 0.5 * alpha * grad_norm:
+	while np.isinf(fxn) or fx0 - fxn < 0.5 * alpha * grad_norm2:
 		alpha /= 2
 		xn = x0 - alpha * gradx0
 		fxn = goal(xn).data.item()
@@ -68,6 +68,9 @@ for i in range(int(1e3)):
 	x = x - alpha * x.grad
 u, v = renew_lagrange(u, v, x)
 print("u: {0}, v: {1}".format(u, v))
+print("eq_cons: {0} ineq_cons: {1}".format(eq_cons_fun(x), ineq_cons_fun(x)))
+d = torch.norm(x.grad).data.item()
+print("grad norm: {0}".format(d))
 
 # USUAL Adam
 x = torch.tensor(data=[0.]*n, dtype=torch.float, requires_grad=True)
@@ -84,6 +87,9 @@ for i in range(int(1e3)):
 	print("gradient: {0}".format(x.grad))
 u, v = renew_lagrange(u, v, x)
 print("u: {0}, v: {1}".format(u, v))
+print("eq_cons: {0} ineq_cons: {1}".format(eq_cons_fun(x), ineq_cons_fun(x)))
+d = torch.norm(x.grad).data.item()
+print("grad norm: {0}".format(d))
 
 ##########################################################################
 # Целочисленные ограничения
