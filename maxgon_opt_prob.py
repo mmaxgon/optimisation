@@ -129,7 +129,8 @@ def get_relaxed_solution(
 	opt_prob,
 	nlp_solver="SCIPY", # SCIPY или IPOPT или NLOPT
 	custom_linear_constraints=None,
-	custom_nonlinear_constraints=None
+	custom_nonlinear_constraints=None,
+	options=None
 ):
 	assert(nlp_solver.upper() in ["SCIPY", "IPOPT", "NLOPT"])
 	# линейная задача
@@ -151,15 +152,17 @@ def get_relaxed_solution(
 			A_eq = None
 			b_eq = None
 		else:
-			A_eq = np.array(lin_cons.A)[ix_eq]
-			b_eq = np.array(lin_cons.bounds.ub)[ix_eq]
+			A_eq = lin_cons.A[ix_eq]
+			b_eq = lin_cons.bounds.ub[ix_eq]
 		
 		bounds = []
 		for i in range(len(opt_prob.dvars.bounds.lb)):
 			bounds.append((opt_prob.dvars.bounds.lb[i], opt_prob.dvars.bounds.ub[i]))
 
 		c = opt_prob.objective.lin_coeffs
-		
+
+		if options is None:
+			options = {"disp": True}
 		res = opt.linprog(
 			c=c,
 			A_ub=A_ub,
@@ -169,7 +172,7 @@ def get_relaxed_solution(
 			bounds=bounds,
 			method='simplex',
 			callback=None,
-			options=None,
+			options=options,
 			x0=opt_prob.dvars.x0
 		)
 		print(res)
@@ -206,13 +209,15 @@ def get_relaxed_solution(
 					custom_nonlinear_constraints.bounds.ub
 				)
 			)
+		if options is None:
+			options = {"verbose": 0, "maxiter": 100}
 		res = opt.minimize(
 			fun=opt_prob.objective.fun,
 			bounds=opt.Bounds(opt_prob.dvars.bounds.lb, opt_prob.dvars.bounds.ub),
 			constraints=constraints,
 			x0=opt_prob.dvars.x0,
 			method="trust-constr",
-			options={'verbose': 0, "maxiter": 200}
+			options=options
 		)
 		res = {"x": res.x, "obj": res.fun, "success": res.success, "constr_violation": res.constr_violation}
 		return res
@@ -259,8 +264,10 @@ def get_relaxed_solution(
 			cl=cl,
 			cu=cu,
 		)
-		nlp.add_option('tol', 1e-4)
-		nlp.add_option('print_level', 1)
+		if options is None:
+			options = {"tol": 1e-4, "print_level": 1}
+		for option in options:
+			nlp.add_option(option, options[option])
 		x, res = nlp.solve(opt_prob.dvars.x0)
 		constr_violation = np.concatenate([cl-res["g"], res["g"]-cu])
 		constr_violation = constr_violation[constr_violation > 0]
@@ -331,13 +338,31 @@ def get_relaxed_solution(
 			nl_opt.add_equality_mconstraint(eq_cons, [1e-6] * len(ix_eq))
 		if len(ix_ineq) > 0:
 			nl_opt.add_inequality_mconstraint(ineq_cons, [1e-6] * 2 * len(ix_ineq))
-		nl_opt.set_xtol_rel(1e-9)
-		nl_opt.set_maxtime(5)
 		x0 = opt_prob.dvars.x0
 		ix_l = np.where(x0 < opt_prob.dvars.bounds.lb)[0]
 		ix_m = np.where(x0 > opt_prob.dvars.bounds.ub)[0]
 		x0[ix_l] = opt_prob.dvars.bounds.lb[ix_l]
 		x0[ix_m] = opt_prob.dvars.bounds.ub[ix_m]
+
+		if options is None:
+			options = {"xtol_rel": 1e-9, "maxtime": 5}
+		for option in options:
+			val = options[option]
+			if option == "stopval":
+				nl_opt.set_stopval(val)
+			elif option == "xtol_rel":
+				nl_opt.set_xtol_rel(val)
+			elif option == "xtol_abs":
+				nl_opt.set_xtol_abs(val)
+			elif option == "ftol_rel":
+				nl_opt.set_ftol_rel(val)
+			elif option == "ftol_abs":
+				nl_opt.set_ftol_abs(val)
+			elif option == "maxtime":
+				nl_opt.set_maxtime(val)
+			else:
+				raise NotImplementedError("Option {0}".format(option))
+
 		res_x = nl_opt.optimize(x0)
 		constr_violation = np.concatenate([np.abs(_eq_cons(res_x)), _ineq_cons(res_x)])
 		constr_violation = constr_violation[constr_violation > 0]

@@ -103,25 +103,51 @@ cust_lin_cons=mg_opt.linear_constraints(n=3, m=1, A=[[1., 0., 0.]], bounds=mg_op
 
 res_LP = mg_opt.get_relaxed_solution(opt_prob_lin, custom_linear_constraints=cust_lin_cons)
 print(res_LP)
-res_LP = mg_opt.get_relaxed_solution(opt_prob_lin)
+res_LP = mg_opt.get_relaxed_solution(opt_prob_lin, options={"disp": False})
 print(res_LP)
 
-res_NLP = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="SCIPY", custom_linear_constraints=cust_lin_cons)
+res_NLP = mg_opt.get_relaxed_solution(
+	opt_prob, nlp_solver="SCIPY",
+	custom_linear_constraints=cust_lin_cons
+)
 #[1.0000001 , 2.3690476 , 2.11904753]
 print(res_NLP)
-res_NLP = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="SCIPY", custom_linear_constraints=None)
+res_NLP = mg_opt.get_relaxed_solution(
+	opt_prob,
+	nlp_solver="SCIPY",
+	custom_linear_constraints=None,
+	options={"verbose": 4, "maxiter": 100}
+)
 # [0.60296492, 2.48721232, 2.33647259]
 nlp_lower_bound = res_NLP["obj"]
 print(res_NLP)
 
-res_NLP_ipopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="IPOPT", custom_linear_constraints=cust_lin_cons)
+res_NLP_ipopt = mg_opt.get_relaxed_solution(
+	opt_prob,
+	nlp_solver="IPOPT",
+	custom_linear_constraints=cust_lin_cons
+)
 print(res_NLP_ipopt)
-res_NLP_ipopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="IPOPT", custom_linear_constraints=None)
+res_NLP_ipopt = mg_opt.get_relaxed_solution(
+	opt_prob,
+	nlp_solver="IPOPT",
+	custom_linear_constraints=None,
+	options={"tol": 1e-4, "print_level": 4}
+)
 print(res_NLP_ipopt)
 
-res_NLP_nlopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="NLOPT", custom_linear_constraints=cust_lin_cons)
+res_NLP_nlopt = mg_opt.get_relaxed_solution(
+	opt_prob,
+	nlp_solver="NLOPT",
+	custom_linear_constraints=cust_lin_cons
+)
 print(res_NLP_nlopt)
-res_NLP_nlopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="NLOPT", custom_linear_constraints=None)
+res_NLP_nlopt = mg_opt.get_relaxed_solution(
+	opt_prob,
+	nlp_solver="NLOPT",
+	custom_linear_constraints=None,
+	options={"xtol_abs": 1e-9}
+)
 print(res_NLP_nlopt)
 ####################################################################################################
 # Получение допустимого решения как приближения непрерывного
@@ -153,7 +179,13 @@ sol = mg_opt.get_POA_solution(
 	nlp_solver="NLOPT"
 )
 print(sol)
-lin_sol = mg_opt.get_POA_solution(opt_prob_lin, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
+lin_sol = mg_opt.get_POA_solution(
+	opt_prob_lin,
+	if_nlp_lower_bound=False,
+	if_refine=False,
+	if_project=False,
+	random_points_count=0
+)
 print(lin_sol)
 
 # BB
@@ -1148,7 +1180,8 @@ def obj_funct(t):
 	res_nlp = mg_opt.get_relaxed_solution(
 		opt_prob,
 		custom_linear_constraints=mg_opt.linear_constraints(n=3, m=1, A=[[1, 0, 0]], bounds=mg_opt.bounds(lb=[t[0]], ub=[t[0] + 1 - 1e-6])),
-		nlp_solver="IPOPT"
+		nlp_solver="NLOPT",
+		options={"xtol_abs": 1e-6, "maxtime": 1}
 	)
 	if res_nlp["success"] and res_nlp["constr_violation"] < 1e-6:
 		lower_bound = res_nlp["obj"]
