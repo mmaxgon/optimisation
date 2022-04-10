@@ -12,6 +12,7 @@ import copy
 import numpy as np
 import scipy.optimize as opt
 import cyipopt
+import nlopt
 import mip as mip
 
 # from torch import tensor
@@ -126,11 +127,11 @@ class optimization_problem:
 ####################################################################################################
 def get_relaxed_solution(
 	opt_prob,
-	nlp_solver="SCIPY", # SCIPY или IPOPT
+	nlp_solver="SCIPY", # SCIPY или IPOPT или NLOPT
 	custom_linear_constraints=None,
 	custom_nonlinear_constraints=None
 ):
-	assert(nlp_solver.upper() in ["SCIPY", "IPOPT"])
+	assert(nlp_solver.upper() in ["SCIPY", "IPOPT", "NLOPT"])
 	# линейная задача
 	if opt_prob.objective.if_linear and (opt_prob.nonlinear_constraints is None) and (custom_nonlinear_constraints is None):
 		if not(custom_linear_constraints is None):
@@ -253,6 +254,61 @@ def get_relaxed_solution(
 			"x": res["x"],
 			"obj": res["obj_val"],
 			"success": res["status"]==0,
+			"constr_violation": cv
+		}
+		return res
+	elif nlp_solver.upper() == "NLOPT":
+		lb = np.concatenate([opt_prob.linear_constraints.bounds.lb, opt_prob.nonlinear_constraints.bounds.lb])
+		ub = np.concatenate([opt_prob.linear_constraints.bounds.ub, opt_prob.nonlinear_constraints.bounds.ub])
+		m = len(lb)
+		ix_eq = np.where(lb == ub)[0]
+		ix_ineq = np.where(lb < ub)[0]
+		assert(set(np.concatenate([ix_eq, ix_ineq])) == set(range(m)))
+		def nlopt_goal(x, grad):
+			return opt_prob.objective.fun(x)
+		def _eq_cons(x):
+			return np.concatenate(
+				[np.matmul(opt_prob.linear_constraints.A, x),
+				 opt_prob.nonlinear_constraints.fun(x)]
+			)[ix_eq] - ub[ix_eq]
+		def eq_cons(result, x, grad):
+			res = _eq_cons(x)
+			result[:] = res
+			return res
+		def _ineq_cons(x):
+			return np.concatenate(
+				[np.matmul(opt_prob.linear_constraints.A, x),
+				 opt_prob.nonlinear_constraints.fun(x)]
+			)[ix_ineq]
+		def ineq_cons(result, x, grad):
+			res = _ineq_cons(x)
+			result[:] = res
+			return res
+		nl_opt = nlopt.opt(nlopt.LN_COBYLA, opt_prob.dvars.n)
+		nl_opt.set_min_objective(nlopt_goal)
+		nl_opt.set_lower_bounds(opt_prob.dvars.bounds.lb)
+		nl_opt.set_upper_bounds(opt_prob.dvars.bounds.ub)
+		if len(ix_eq) > 0:
+			nl_opt.add_equality_mconstraint(eq_cons, [1e-6] * len(ix_eq))
+		if len(ix_ineq) > 0:
+			nl_opt.add_inequality_mconstraint(ineq_cons, [1e-6] * len(ix_ineq))
+		nl_opt.set_xtol_rel(1e-9)
+		x0 = opt_prob.dvars.x0
+		ix_l = np.where(x0 < opt_prob.dvars.bounds.lb)[0]
+		ix_m = np.where(x0 > opt_prob.dvars.bounds.ub)[0]
+		x0[ix_l] = opt_prob.dvars.bounds.lb[ix_l]
+		x0[ix_m] = opt_prob.dvars.bounds.ub[ix_m]
+		res_x = nl_opt.optimize(x0)
+		constr_violation = np.concatenate([np.abs(_eq_cons(res_x)), _ineq_cons(res_x)])
+		constr_violation = constr_violation[constr_violation > 0]
+		if len(constr_violation) > 0:
+			cv = max(constr_violation)
+		else:
+			cv = 0
+		res = {
+			"x": res_x,
+			"obj": nl_opt.last_optimum_value(),
+			"success": nl_opt.last_optimize_result() > 0,
 			"constr_violation": cv
 		}
 		return res

@@ -97,25 +97,33 @@ opt_prob_lin = mg_opt.optimization_problem(decision_vars, objective_lin_fun, lin
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
+importlib.reload(mg_opt)
 # Нижняя граница как решение NLP-задачи
 res_LP = mg_opt.get_relaxed_solution(opt_prob_lin)
 print(res_LP)
 
-res_NLP = mg_opt.get_relaxed_solution(opt_prob)
+res_NLP = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="SCIPY")
 nlp_lower_bound = res_NLP["obj"]
 print(res_NLP)
 
 res_NLP_ipopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="IPOPT")
 print(res_NLP_ipopt)
 
+res_NLP_nlopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="NLOPT")
+print(res_NLP_nlopt)
 ####################################################################################################
 # Получение допустимого решения как приближения непрерывного
 ####################################################################################################
-init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP["x"], nlp_solver="IPOPT")
+init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP["x"], nlp_solver="SCIPY")
 print(init_feasible1)
 init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, [0.60296657, 2.33647076, 2.48721229], nlp_solver="IPOPT")
 print(init_feasible1)
+init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP["x"], nlp_solver="NLOPT")
+print(init_feasible1)
+
 init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP["x"], nlp_solver="IPOPT")
+print(init_feasible2)
+init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP["x"], nlp_solver="NLOPT")
 print(init_feasible2)
 # НЕ РАБОТАЕТ
 # init_feasible3 = mg_opt.get_feasible_solution3(opt_prob, tau=10)
@@ -126,11 +134,11 @@ print(init_feasible2)
 # POA
 sol = mg_opt.get_POA_solution(
 	opt_prob,
-	if_nlp_lower_bound=False,
+	if_nlp_lower_bound=True,
 	if_refine=False,
-	if_project=False,
+	if_project=True,
 	random_points_count=0,
-	nlp_solver="IPOPT"
+	nlp_solver="NLOPT"
 )
 print(sol)
 lin_sol = mg_opt.get_POA_solution(opt_prob_lin, if_nlp_lower_bound=False, if_refine=False, if_project=False, random_points_count=0)
@@ -138,9 +146,17 @@ print(lin_sol)
 
 # BB
 bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="SCIPY")
+print(bb_sol)
 bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="IPOPT")
 print(bb_sol)
+bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="NLOPT")
+print(bb_sol)
+
 bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, upper_bound=init_feasible2["obj"], nlp_solver="SCIPY")
+print(bb_sol)
+bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, upper_bound=init_feasible2["obj"], nlp_solver="IPOPT")
+print(bb_sol)
+bb_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, upper_bound=init_feasible2["obj"], nlp_solver="NLOPT")
 print(bb_sol)
 bb_lin_sol = mg_opt.get_BB_solution(opt_prob_lin, int_eps=1e-4)
 print(bb_lin_sol)
@@ -148,18 +164,22 @@ print(bb_lin_sol)
 ####################################################################################################
 # Объект, уточняющий непрерывные компоненты решения при фиксации целочисленных
 ####################################################################################################
-refiner_optimizer_obj = mg_opt.refiner_optimizer(opt_prob)
+refiner_optimizer_obj = mg_opt.refiner_optimizer(opt_prob, nlp_solver="SCIPY")
+print(refiner_optimizer_obj.get_solution([0.3, 1.9999999980529146, 2.0000000038941708]))
 refiner_optimizer_obj = mg_opt.refiner_optimizer(opt_prob, nlp_solver="IPOPT")
-# refine = refiner_optimizer_obj.get_solution([0.3, 1.9999999980529146, 2.0000000038941708])
-# print(refine)
+print(refiner_optimizer_obj.get_solution([0.3, 1.9999999980529146, 2.0000000038941708]))
+refiner_optimizer_obj = mg_opt.refiner_optimizer(opt_prob, nlp_solver="NLOPT")
+print(refiner_optimizer_obj.get_solution([0.3, 1.9999999980529146, 2.0000000038941708]))
 # [1.75, 2.  , 2.  ]
 ####################################################################################################
 # Объект, проецирующий недопустимое решение на допустимую область
 ####################################################################################################
-projector_optimizer_obj = mg_opt.projector_optimizer(opt_prob)
+projector_optimizer_obj = mg_opt.projector_optimizer(opt_prob, nlp_solver="SCIPY")
+print(projector_optimizer_obj.get_solution([5, 6, 7]))
 projector_optimizer_obj = mg_opt.projector_optimizer(opt_prob, nlp_solver="IPOPT")
-# project = projector_optimizer_obj.get_solution([5, 6, 7])
-# print(project)
+print(projector_optimizer_obj.get_solution([5, 6, 7]))
+projector_optimizer_obj = mg_opt.projector_optimizer(opt_prob, nlp_solver="NLOPT")
+print(projector_optimizer_obj.get_solution([5, 6, 7]))
 # [2.36856454, 0.98614998, 3.32076913]
 
 ####################################################################################################
@@ -841,8 +861,8 @@ res1 = poa.solve(
 	# NLP_refiner_object=refiner_optimizer_obj,
 	# NLP_projector_object=projector_optimizer_obj,
 	lower_bound=nlp_lower_bound
-	# ,custom_constraints_list=[model.y[0] >= 1]
-	# ,approximation_points=approximation_points
+	,custom_constraints_list=[model.y[0] >= 1]
+	,approximation_points=approximation_points
 )
 print(time() - start_time)
 print(res1)
