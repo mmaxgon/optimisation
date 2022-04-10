@@ -143,8 +143,8 @@ def get_relaxed_solution(
 			A_ub = None
 			b_ub = None
 		else:
-			A_ub = np.array(lin_cons.A)[ix_ub]
-			b_ub = np.array(lin_cons.bounds.ub)[ix_ub]
+			A_ub = np.concatenate((lin_cons.A[ix_ub], -lin_cons.A[ix_ub]))
+			b_ub = np.concatenate((lin_cons.bounds.ub[ix_ub], -lin_cons.bounds.lb[ix_ub]))
 			
 		ix_eq = np.where(lin_cons.bounds.lb == lin_cons.bounds.ub)[0]
 		if len(ix_eq) == 0:
@@ -223,18 +223,36 @@ def get_relaxed_solution(
 			def gradient(self, x):
 				return opt.approx_fprime(x, self.objective, epsilon=1e-8)
 			def constraints(self, x):
-				return np.concatenate(
-					[np.matmul(opt_prob.linear_constraints.A, x),
-					opt_prob.nonlinear_constraints.fun(x)]
-				)
+				_cons = [
+					np.matmul(opt_prob.linear_constraints.A, x),
+					opt_prob.nonlinear_constraints.fun(x)
+				]
+				if custom_linear_constraints is not None:
+					_cons.append(np.matmul(custom_linear_constraints.A, x))
+				if custom_nonlinear_constraints is not None:
+					_cons.append(custom_nonlinear_constraints.fun(x))
+				return np.concatenate(_cons)
 			def jacobian(self, x):
 				return opt.slsqp.approx_jacobian(x, self.constraints, epsilon=1e-8)
-		cl = np.concatenate([opt_prob.linear_constraints.bounds.lb, opt_prob.nonlinear_constraints.bounds.lb])
-		cu = np.concatenate([opt_prob.linear_constraints.bounds.ub, opt_prob.nonlinear_constraints.bounds.ub])
+		cl = [opt_prob.linear_constraints.bounds.lb, opt_prob.nonlinear_constraints.bounds.lb]
+		cu = [opt_prob.linear_constraints.bounds.ub, opt_prob.nonlinear_constraints.bounds.ub]
+		if custom_linear_constraints is not None:
+			cl.append(custom_linear_constraints.bounds.lb)
+			cu.append(custom_linear_constraints.bounds.ub)
+		if custom_nonlinear_constraints is not None:
+			cl.append(custom_nonlinear_constraints.bounds.lb)
+			cu.append(custom_nonlinear_constraints.bounds.ub)
+		cl = np.concatenate(cl)
+		cu = np.concatenate(cu)
 		nlp_prob = ipopt_prob()
+		m = opt_prob.linear_constraints.m + opt_prob.nonlinear_constraints.m
+		if custom_linear_constraints is not None:
+			m += custom_linear_constraints.m
+		if custom_nonlinear_constraints is not None:
+			m += custom_nonlinear_constraints.m
 		nlp = cyipopt.Problem(
 			n=opt_prob.dvars.n,
-			m=opt_prob.linear_constraints.m + opt_prob.nonlinear_constraints.m,
+			m=m,
 			problem_obj=nlp_prob,
 			lb=opt_prob.dvars.bounds.lb,
 			ub=opt_prob.dvars.bounds.ub,
@@ -258,28 +276,49 @@ def get_relaxed_solution(
 		}
 		return res
 	elif nlp_solver.upper() == "NLOPT":
-		lb = np.concatenate([opt_prob.linear_constraints.bounds.lb, opt_prob.nonlinear_constraints.bounds.lb])
-		ub = np.concatenate([opt_prob.linear_constraints.bounds.ub, opt_prob.nonlinear_constraints.bounds.ub])
-		m = len(lb)
-		ix_eq = np.where(lb == ub)[0]
-		ix_ineq = np.where(lb < ub)[0]
+		cl = [opt_prob.linear_constraints.bounds.lb, opt_prob.nonlinear_constraints.bounds.lb]
+		cu = [opt_prob.linear_constraints.bounds.ub, opt_prob.nonlinear_constraints.bounds.ub]
+		if custom_linear_constraints is not None:
+			cl.append(custom_linear_constraints.bounds.lb)
+			cu.append(custom_linear_constraints.bounds.ub)
+		if custom_nonlinear_constraints is not None:
+			cl.append(custom_nonlinear_constraints.bounds.lb)
+			cu.append(custom_nonlinear_constraints.bounds.ub)
+		cl = np.concatenate(cl)
+		cu = np.concatenate(cu)
+		m = len(cl)
+		ix_eq = np.where(cl == cu)[0]
+		ix_ineq = np.where(cl < cu)[0]
 		assert(set(np.concatenate([ix_eq, ix_ineq])) == set(range(m)))
 		def nlopt_goal(x, grad):
 			return opt_prob.objective.fun(x)
 		def _eq_cons(x):
-			return np.concatenate(
-				[np.matmul(opt_prob.linear_constraints.A, x),
-				 opt_prob.nonlinear_constraints.fun(x)]
-			)[ix_eq] - ub[ix_eq]
+			_cons = [
+				np.matmul(opt_prob.linear_constraints.A, x),
+				opt_prob.nonlinear_constraints.fun(x)
+			]
+			if custom_linear_constraints is not None:
+				_cons.append(np.matmul(custom_linear_constraints.A, x))
+			if custom_nonlinear_constraints is not None:
+				_cons.append(custom_nonlinear_constraints.fun(x))
+			_cons = np.concatenate(_cons)
+			return _cons[ix_eq] - cu[ix_eq]
 		def eq_cons(result, x, grad):
 			res = _eq_cons(x)
 			result[:] = res
 			return res
 		def _ineq_cons(x):
-			return np.concatenate(
-				[np.matmul(opt_prob.linear_constraints.A, x),
-				 opt_prob.nonlinear_constraints.fun(x)]
-			)[ix_ineq]
+			_cons = [
+				np.matmul(opt_prob.linear_constraints.A, x),
+				opt_prob.nonlinear_constraints.fun(x)
+			]
+			if custom_linear_constraints is not None:
+				_cons.append(np.matmul(custom_linear_constraints.A, x))
+			if custom_nonlinear_constraints is not None:
+				_cons.append(custom_nonlinear_constraints.fun(x))
+			_cons = np.concatenate(_cons)
+			_cons = _cons[ix_ineq]
+			return np.concatenate([cl[ix_ineq] - _cons, _cons - cu[ix_ineq]])
 		def ineq_cons(result, x, grad):
 			res = _ineq_cons(x)
 			result[:] = res
@@ -291,8 +330,9 @@ def get_relaxed_solution(
 		if len(ix_eq) > 0:
 			nl_opt.add_equality_mconstraint(eq_cons, [1e-6] * len(ix_eq))
 		if len(ix_ineq) > 0:
-			nl_opt.add_inequality_mconstraint(ineq_cons, [1e-6] * len(ix_ineq))
+			nl_opt.add_inequality_mconstraint(ineq_cons, [1e-6] * 2 * len(ix_ineq))
 		nl_opt.set_xtol_rel(1e-9)
+		nl_opt.set_maxtime(5)
 		x0 = opt_prob.dvars.x0
 		ix_l = np.where(x0 < opt_prob.dvars.bounds.lb)[0]
 		ix_m = np.where(x0 > opt_prob.dvars.bounds.ub)[0]

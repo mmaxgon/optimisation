@@ -97,19 +97,31 @@ opt_prob_lin = mg_opt.optimization_problem(decision_vars, objective_lin_fun, lin
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
-importlib.reload(mg_opt)
 # Нижняя граница как решение NLP-задачи
+importlib.reload(mg_opt)
+cust_lin_cons=mg_opt.linear_constraints(n=3, m=1, A=[[1., 0., 0.]], bounds=mg_opt.bounds(lb=[1.], ub=[3.]))
+
+res_LP = mg_opt.get_relaxed_solution(opt_prob_lin, custom_linear_constraints=cust_lin_cons)
+print(res_LP)
 res_LP = mg_opt.get_relaxed_solution(opt_prob_lin)
 print(res_LP)
 
-res_NLP = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="SCIPY")
+res_NLP = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="SCIPY", custom_linear_constraints=cust_lin_cons)
+#[1.0000001 , 2.3690476 , 2.11904753]
+print(res_NLP)
+res_NLP = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="SCIPY", custom_linear_constraints=None)
+# [0.60296492, 2.48721232, 2.33647259]
 nlp_lower_bound = res_NLP["obj"]
 print(res_NLP)
 
-res_NLP_ipopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="IPOPT")
+res_NLP_ipopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="IPOPT", custom_linear_constraints=cust_lin_cons)
+print(res_NLP_ipopt)
+res_NLP_ipopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="IPOPT", custom_linear_constraints=None)
 print(res_NLP_ipopt)
 
-res_NLP_nlopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="NLOPT")
+res_NLP_nlopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="NLOPT", custom_linear_constraints=cust_lin_cons)
+print(res_NLP_nlopt)
+res_NLP_nlopt = mg_opt.get_relaxed_solution(opt_prob, nlp_solver="NLOPT", custom_linear_constraints=None)
 print(res_NLP_nlopt)
 ####################################################################################################
 # Получение допустимого решения как приближения непрерывного
@@ -1117,6 +1129,7 @@ model_minlp.nlc2 = pyomo.Constraint(expr = model_minlp.x[1]**2 + model_minlp.x[2
 ###############################################################################
 # GLOBAL OPTIMIZATION
 ###############################################################################
+importlib.reload(mg_opt)
 poa = mg_minlp.mmaxgon_MINLP_POA(
 	eps=1e-6
 )
@@ -1134,7 +1147,8 @@ def obj_funct(t):
 	# Сначала получаем нижнюю границу решения как решение NLP
 	res_nlp = mg_opt.get_relaxed_solution(
 		opt_prob,
-		custom_linear_constraints=mg_opt.linear_constraints(n=3, m=1, A=[[1, 0, 0]], bounds=mg_opt.bounds(lb=[t[0]], ub=[t[0] + 1 - 1e-6]))
+		custom_linear_constraints=mg_opt.linear_constraints(n=3, m=1, A=[[1, 0, 0]], bounds=mg_opt.bounds(lb=[t[0]], ub=[t[0] + 1 - 1e-6])),
+		nlp_solver="IPOPT"
 	)
 	if res_nlp["success"] and res_nlp["constr_violation"] < 1e-6:
 		lower_bound = res_nlp["obj"]
