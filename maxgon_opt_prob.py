@@ -344,24 +344,22 @@ def get_relaxed_solution(
 		x0[ix_l] = opt_prob.dvars.bounds.lb[ix_l]
 		x0[ix_m] = opt_prob.dvars.bounds.ub[ix_m]
 
+		options_dict = {
+			"stopval": nl_opt.set_stopval,
+			"xtol_rel": nl_opt.set_xtol_rel,
+			"xtol_abs": nl_opt.set_xtol_abs,
+			"ftol_rel": nl_opt.set_ftol_rel,
+			"ftol_abs": nl_opt.set_ftol_abs,
+			"maxeval": nl_opt.set_maxeval,
+			"maxtime": nl_opt.set_maxtime
+		}
 		if options is None:
 			options = {"xtol_rel": 1e-9, "maxtime": 5}
 		for option in options:
-			val = options[option]
-			if option == "stopval":
-				nl_opt.set_stopval(val)
-			elif option == "xtol_rel":
-				nl_opt.set_xtol_rel(val)
-			elif option == "xtol_abs":
-				nl_opt.set_xtol_abs(val)
-			elif option == "ftol_rel":
-				nl_opt.set_ftol_rel(val)
-			elif option == "ftol_abs":
-				nl_opt.set_ftol_abs(val)
-			elif option == "maxtime":
-				nl_opt.set_maxtime(val)
-			else:
+			if not (option in options_dict.keys()):
 				raise NotImplementedError("Option {0}".format(option))
+			val = options[option]
+			options_dict[option](val)
 
 		res_x = nl_opt.optimize(x0)
 		constr_violation = np.concatenate([np.abs(_eq_cons(res_x)), _ineq_cons(res_x)])
