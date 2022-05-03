@@ -722,6 +722,128 @@ class gekko_MIP_model_wrapper(model_wrapper):
 		return True
 
 ####################################################################################################
+# Обёртка SCIP
+####################################################################################################
+class scip_MIP_model_wrapper(model_wrapper):
+	def __init__(
+		self,
+		scip_model,                    # Объект pyscipopt.Model
+		scip_solver_options=None
+	):
+		# self.__scip_model = copy.deepcopy(scip_model)
+		self.__scip_model = scip_model
+		self.__scip_model.freeTransform()
+		self.__results = None
+
+		# Нелинейные ограничения (пополняются для каждой итерации, на которой получаются недопустимые значения)
+		self.__non_lin_cons = []
+		# ограничения на функцию цели (линейная аппроксимация функции цели, добавляется после каждой итерации)
+		self.__obj_cons = []
+		# дополнительные пользовательские ограничения
+		self.__custom_cons = []
+
+		"""
+		Если функция цели определена в scip_model, то предполагается, что она линейная, и мы её минимизируем MIP-солвером.
+		Если функции цели в scip_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
+		В этом случае мы будем минимизировать её линейные аппроксимации, и для этого нам понадобится вспомогательная
+		переменная решений mu
+		"""
+		self.__if_objective_defined = (str(self.__scip_model.getObjective()) != "Expr({})") and (str(self.__scip_model.getObjective()) != "")
+		if not self.__if_objective_defined:
+			# Дополнительная переменная решений - верхняя граница цели (максимум от линейных аппроксимаций)
+			self.__mu = self.__scip_model.addVar(name="mu", vtype="C", lb=-np.inf)
+			# На первом шаге накладываем на неё ограничение снизу, чтобы было решение
+			self.__mu_temp_cons = self.__scip_model.addCons(self.__mu >= -1e9)
+			# # цель MILP
+			self.__scip_model.setObjective(self.__mu)
+		else:
+			self.__mu_temp_cons = None
+
+		if scip_solver_options is not None:
+			for key in scip_solver_options.keys():
+				self.__scip_model.setParam(key, scip_solver_options[key])
+
+	# возвращаем модель
+	def get_mip_model(self):
+		return self.__scip_model
+
+	# возвращаем число аппроксимаций функции цели
+	def get_object_cuts_num(self):
+		return len(self.__obj_cons)
+
+	# возвращаем число аппроксимаций нелинейных ограничений
+	def get_non_lin_constr_cuts_num(self):
+		return len(self.__non_lin_cons)
+
+	# удаляем временные ограничения
+	def del_temp_constr(self):
+		if self.__mu_temp_cons is not None:
+			self.__scip_model.freeTransform()
+			self.__scip_model.delCons(self.__mu_temp_cons)
+			return True
+		return False
+
+	# задана ли функция цели в pyomo
+	def if_objective_defined(self):
+		return self.__if_objective_defined
+
+	# значение целевой функции
+	def get_objective_value(self):
+		return self.__scip_model.getObjVal()
+
+	# значения переменных решения
+	def get_values(self, xvars):
+		return [self.__results[x] for x in xvars]
+
+	# очищаем аппроксимационные и пользовательские ограничения
+	def clear(self):
+		self.__scip_model.freeTransform()
+		for c in self.__non_lin_cons:
+			self.__scip_model.delCons(c)
+		for c in self.__obj_cons:
+			self.__scip_model.delCons(c)
+		for c in self.__custom_cons:
+			self.__scip_model.delCons(c)
+		self.__non_lin_cons.clear()
+		self.__obj_cons.clear()
+		self.__custom_cons.clear()
+		if not self.__if_objective_defined:
+			# На первом шаге накладываем на вспомогательную переменную решений ограничение снизу, чтобы было решение
+			self.del_temp_constr()
+			self.__mu_temp_cons = self.__scip_model.addCons(self.__mu >= -1e9)
+
+	# добавляем линеаризованные ограничения на функцию цели
+	def add_obj_constr(self, fx, gradf, xgradf, xvars):
+		expr = \
+			fx - \
+			xgradf + \
+			sum(xvars[i] * gradf[i] for i in range(len(xvars))) <= self.__mu
+		self.__scip_model.freeTransform()
+		self.__obj_cons.append(self.__scip_model.addCons(expr))
+
+	# добавляем лианеризованные ограничения на нарушенные ограничения
+	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
+		expr = \
+			gx_violated[k] - \
+			xgradg_violated[k] + \
+			sum(xvars[i] * gradg_violated[k][i] for i in range(len(xvars))) <= 0
+		self.__scip_model.freeTransform()
+		self.__non_lin_cons.append(self.__scip_model.addCons(expr))
+
+	# добавляем дополнительное пользовательское ограничение
+	def add_custom_constr(self, expr):
+		self.__scip_model.freeTransform()
+		self.__custom_cons.append(self.__scip_model.addCons(expr))
+
+	def solve(self):
+		self.__scip_model.freeTransform()
+		self.__scip_model.optimize()
+		self.__results = self.__scip_model.getBestSol()
+		if self.__scip_model.getStatus() == "infeasible":
+			return False
+		return True
+
+####################################################################################################
 # Решение MINLP методом линейных аппроксимация
 # Класс-оркестратор решения
 ####################################################################################################

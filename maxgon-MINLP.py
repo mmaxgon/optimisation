@@ -18,6 +18,7 @@ from ortools.linear_solver import pywraplp as ortools_linear_solver
 import docplex.mp.model as docplex_mp_model
 import docplex.cp.model as docplex_cp_model
 from gekko import GEKKO
+from pyscipopt import Model as scip_Model
 import rbfopt
 ###############################################################################
 '''
@@ -555,6 +556,40 @@ model_mip.lin_cons = model_mip.add_constr(8 * model_mip.y[0] + 14 * model_mip.x[
 # 	print([x.x for x in xvars])
 # model_mip.remove([model_mip.lin_cons])
 
+##############################################################################
+# Задача как SCIP MILP
+##############################################################################
+model_scip_milp = scip_Model("SCIP MILP")
+
+model_scip_milp_y = [model_scip_milp.addVar(name="y", vtype="C", lb=0.0, ub=10.0)]
+model_scip_milp_x = [model_scip_milp.addVar("x{0}".format(i), vtype="I", lb=0, ub=10) for i in range(2)]
+
+model_scip_milp_lin_cons = model_scip_milp.addCons(8 * model_scip_milp_y[0] + 14 * model_scip_milp_x[0] + 7 * model_scip_milp_x[1] - 56 == 0)
+
+# model_scip_milp.optimize()
+# sol = model_scip_milp.getBestSol()
+# print([sol[model_scip_milp_y[0]], sol[model_scip_milp_x[0]], sol[model_scip_milp_x[1]]])
+
+##############################################################################
+# Задача как SCIP MINLP
+##############################################################################
+model_scip_minlp = scip_Model("SCIP MINLP")
+
+model_scip_minlp_y = [model_scip_minlp.addVar(name="y", vtype="C", lb=0.0, ub=10.0)]
+model_scip_minlp_x = [model_scip_minlp.addVar("x{0}".format(i), vtype="I", lb=0, ub=10) for i in range(2)]
+model_scip_minlp_mu = model_scip_minlp.addVar(name="mu", vtype="C", lb=-1e9)
+
+model_scip_minlp_lin_cons = model_scip_minlp.addCons(8 * model_scip_minlp_y[0] + 14 * model_scip_minlp_x[0] + 7 * model_scip_minlp_x[1] - 56 == 0)
+model_scip_minlp_non_lin_cons1 = model_scip_minlp.addCons(model_scip_minlp_y[0]**2 + model_scip_minlp_x[0]**2 + model_scip_minlp_x[1]**2 <= 25)
+model_scip_minlp_non_lin_cons2 = model_scip_minlp.addCons(model_scip_minlp_x[0]**2 + model_scip_minlp_x[1]**2 <= 12)
+model_scip_minlp_obj_cons = model_scip_minlp.addCons(-(1000 - model_scip_minlp_y[0]**2 - 2*model_scip_minlp_x[0]**2 - model_scip_minlp_x[1]**2 - model_scip_minlp_y[0]*model_scip_minlp_x[0] - model_scip_minlp_y[0]*model_scip_minlp_x[1]) <= model_scip_minlp_mu)
+
+model_scip_minlp.setObjective(model_scip_minlp_mu)
+
+# model_scip_minlp.optimize()
+# sol = model_scip_minlp.getBestSol()
+# print([sol[model_scip_minlp_y[0]], sol[model_scip_minlp_x[0]], sol[model_scip_minlp_x[1]]])
+
 ###############################################################################
 # Функция, переводящая переменные решения pyomo в вектор
 def DV_2_vec(model):
@@ -575,13 +610,52 @@ def DV_2_vec_gekko(model):
 	x = [model.y[0], model.x[0], model.x[1]]
 	return x
 
+def DV_2_vec_scip_milp(model):
+	vars = model.getVars()
+	x = [vars[2], vars[0], vars[1]]
+	return x
+
+def DV_2_vec_scip_minlp(model):
+	vars = model.getVars()
+	x = [vars[2], vars[0], vars[1], vars[3]]
+	return x
+
 ###############################################################################
 # Решение
 ###############################################################################
-importlib.reload(mg_minlp)
 poa = mg_minlp.mmaxgon_MINLP_POA(
 	eps=1e-6
 )
+
+###############################################################################
+# SCIP MILP
+###############################################################################
+importlib.reload(mg_minlp)
+model_scip_milp = scip_Model("SCIP MILP")
+model_scip_milp_y = [model_scip_milp.addVar(name="y", vtype="C", lb=0.0, ub=10.0)]
+model_scip_milp_x = [model_scip_milp.addVar("x{0}".format(i), vtype="I", lb=0, ub=10) for i in range(2)]
+model_scip_milp_lin_cons = model_scip_milp.addCons(8 * model_scip_milp_y[0] + 14 * model_scip_milp_x[0] + 7 * model_scip_milp_x[1] - 56 == 0)
+
+scip_mip_model_wrapper = mg_minlp.scip_MIP_model_wrapper(
+	scip_model=model_scip_milp
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=scip_mip_model_wrapper,
+	non_lin_obj_fun=opt_prob.objective.fun,
+	non_lin_constr_fun=opt_prob.nonlinear_constraints.fun,
+	decision_vars_to_vector_fun=DV_2_vec_scip_milp,
+	tolerance=1e-1,
+	add_constr="ALL",
+	# NLP_refiner_object=refiner_optimizer_obj,
+	# NLP_projector_object=projector_optimizer_obj,
+	lower_bound=nlp_lower_bound
+	# ,custom_constraints_list=[scip_mip_model_wrapper.get_mip_model().getVars()[2] >= 1]
+	# ,approximation_points=approximation_points
+)
+print(time() - start_time)
+print(res)
 
 ###############################################################################
 # MIP MILP
