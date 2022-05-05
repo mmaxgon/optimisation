@@ -657,6 +657,32 @@ res = poa.solve(
 print(time() - start_time)
 print(res)
 
+model_scip_minlp = scip_Model("SCIP MINLP")
+model_scip_minlp_y = [model_scip_minlp.addVar(name="y", vtype="C", lb=0.0, ub=10.0)]
+model_scip_minlp_x = [model_scip_minlp.addVar("x{0}".format(i), vtype="I", lb=0, ub=10) for i in range(2)]
+model_scip_minlp_mu = model_scip_minlp.addVar(name="mu", vtype="C", lb=-1e9)
+model_scip_minlp_lin_cons = model_scip_minlp.addCons(8 * model_scip_minlp_y[0] + 14 * model_scip_minlp_x[0] + 7 * model_scip_minlp_x[1] - 56 == 0)
+model_scip_minlp_non_lin_cons1 = model_scip_minlp.addCons(model_scip_minlp_y[0]**2 + model_scip_minlp_x[0]**2 + model_scip_minlp_x[1]**2 <= 25)
+model_scip_minlp_non_lin_cons2 = model_scip_minlp.addCons(model_scip_minlp_x[0]**2 + model_scip_minlp_x[1]**2 <= 12)
+model_scip_minlp_obj_cons = model_scip_minlp.addCons(-(1000 - model_scip_minlp_y[0]**2 - 2*model_scip_minlp_x[0]**2 - model_scip_minlp_x[1]**2 - model_scip_minlp_y[0]*model_scip_minlp_x[0] - model_scip_minlp_y[0]*model_scip_minlp_x[1]) <= model_scip_minlp_mu)
+model_scip_minlp.setObjective(model_scip_minlp_mu)
+
+scip_mip_model_wrapper = mg_minlp.scip_MIP_model_wrapper(
+	scip_model=model_scip_minlp
+)
+
+start_time = time()
+res = poa.solve(
+	MIP_model=scip_mip_model_wrapper,
+	non_lin_obj_fun=None,
+	non_lin_constr_fun=None,
+	decision_vars_to_vector_fun=DV_2_vec_scip_minlp,
+	tolerance=1e-1,
+	add_constr="ALL"
+)
+print(time() - start_time)
+print(res)
+
 ###############################################################################
 # MIP MILP
 ###############################################################################

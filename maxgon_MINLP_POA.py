@@ -101,7 +101,7 @@ class pyomo_MIP_model_wrapper(model_wrapper):
 		else:
 			self.__mip_solver = self.__pyomo.SolverFactory(mip_solver_name, executable=mip_solver_executable)
 
-		if mip_solver_options != None:
+		if mip_solver_options is not None:
 			for key in mip_solver_options.keys():
 				self.__mip_solver.options[key] = mip_solver_options[key]
 
@@ -223,7 +223,7 @@ class mip_MIP_model_wrapper(model_wrapper):
 		else:
 			self.__mip_MIP_model.__mu_temp_cons = None
 			
-		if mip_solver_options != None:
+		if mip_solver_options is not None:
 			for key in mip_solver_options.keys():
 				# добавить параметры оптимизации !!!
 				pass
@@ -881,7 +881,7 @@ class mmaxgon_MINLP_POA:
 		approximation_points=[]         # Список точек, в которых будем строиться линейная аппроксимация нелинейной функции целии и нелинейных ограничений до первого MILP-решения
 	):
 		# если функция нелинейных ограничений не задана, то ей становится функция-заглушка со значением -1 (т.е. всегда допустимо)
-		if non_lin_constr_fun == None:
+		if non_lin_constr_fun is None:
 			non_lin_constr_fun = self.__constr_true
 
 		# Очищаем все технические ограничения, которые были добавлены на прошлом прогоне метода
@@ -898,7 +898,7 @@ class mmaxgon_MINLP_POA:
 		x_best = None
 		goal_best = np.Inf
 		upper_bound = np.Inf
-		lower_bound = -np.Inf if lower_bound == None else lower_bound
+		lower_bound = -np.Inf if lower_bound is None else lower_bound
 		prev_obj = -np.Inf
 		if_first_run = True # признак первого прогона
 		iter_num = 0
@@ -907,9 +907,9 @@ class mmaxgon_MINLP_POA:
 		# Если функции цели в MIP_model нет, то значит она нелинейная и задана внешний функцией non_lin_obj_fun.
 		# В этом случае мы будем минимизировать её линейные аппроксимации, и для этого нам понадобится вспомогательная
 		# переменная решений mu
-		if (not MIP_model.if_objective_defined()) and non_lin_obj_fun == None:
+		if (not MIP_model.if_objective_defined()) and non_lin_obj_fun is None:
 			raise ValueError("Не определена функция цели!")
-		if MIP_model.if_objective_defined() and non_lin_obj_fun != None:
+		if MIP_model.if_objective_defined() and non_lin_obj_fun is not None:
 			raise ValueError("Одновременно определены две функции цели!")
 		
 		# список всех переменных решений модели
@@ -975,7 +975,7 @@ class mmaxgon_MINLP_POA:
 			print(x)
 
 			# уточняем непрерывные переменные решения
-			if NLP_refiner_object != None:
+			if NLP_refiner_object is not None:
 				res = NLP_refiner_object.get_solution(x)
 				if res["success"] and res["constr_violation"] <= self.__eps:
 					x = copy.copy(res["x"])
@@ -1040,7 +1040,7 @@ class mmaxgon_MINLP_POA:
 					ix_violated = [ix_violated[ix_most_violated]]
 					if_recalc = True    # поменялось множество индексов ix_violated
 
-				if NLP_projector_object != None:
+				if NLP_projector_object is not None:
 					res = NLP_projector_object.get_solution(x)
 					if res["success"] and res["constr_violation"] <= self.__eps:
 						x = copy.copy(res["x"])
