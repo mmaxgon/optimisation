@@ -6,58 +6,84 @@
 import copy
 import numpy as np
 import scipy.optimize as opt
+# ABC = Abstract Base Class
+from abc import ABCMeta, abstractmethod
 
 ####################################################################################################
 # Интерфейс класса-обёртки для различных фреймворков
 ####################################################################################################
-class model_wrapper:
+class model_wrapper(metaclass=ABCMeta):
 	# возвращаем модель
+	@abstractmethod
 	def get_mip_model(self):
-		raise NotImplementedError("get_mip_model")
+		pass
+		# raise NotImplementedError("get_mip_model")
 
 	# возвращаем число аппроксимаций функции цели
+	@abstractmethod
 	def get_object_cuts_num(self):
-		raise NotImplementedError("get_object_cuts_num")
+		pass
+		# raise NotImplementedError("get_object_cuts_num")
 
 	# возвращаем число аппроксимаций нелинейных ограничений
+	@abstractmethod
 	def get_non_lin_constr_cuts_num(self):
-		raise NotImplementedError("get_non_lin_constr_cuts_num")
+		pass
+		# raise NotImplementedError("get_non_lin_constr_cuts_num")
 
 	# удаляем временные ограничения
+	@abstractmethod
 	def del_temp_constr(self):
-		raise NotImplementedError("del_temp_constr")
+		pass
+		# raise NotImplementedError("del_temp_constr")
 
 	# задана ли функция цели в оптимизационной задаче (или она внешняя)
+	@abstractmethod
 	def if_objective_defined(self):
-		raise NotImplementedError("if_objective_defined")
+		pass
+		# raise NotImplementedError("if_objective_defined")
 
 	# значение целевой функции
+	@abstractmethod
 	def get_objective_value(self):
-		raise NotImplementedError("get_objective_value")
+		pass
+		# raise NotImplementedError("get_objective_value")
 
 	# значения переменных решения
+	@abstractmethod
 	def get_values(self, xvars):
-		raise NotImplementedError("get_values")
+		pass
+		# raise NotImplementedError("get_values")
 
 	# очищаем аппроксимационные и пользовательские ограничения
+	@abstractmethod
 	def clear(self):
-		raise NotImplementedError("clear")
+		pass
+		# raise NotImplementedError("clear")
 
 	# добавляем линеаризованные ограничения на функцию цели
+	@abstractmethod
 	def add_obj_constr(self, fx, gradf, xgradf, xvars):
-		raise NotImplementedError("add_obj_constr")
+		pass
+		# raise NotImplementedError("add_obj_constr")
 
 	# добавляем линеаризованные ограничения на нарушенные ограничения
+	@abstractmethod
 	def add_non_lin_constr(self, k, gx_violated, gradg_violated, xgradg_violated, xvars):
-		raise NotImplementedError("add_non_lin_constr")
+		pass
+		# raise NotImplementedError("add_non_lin_constr")
 
 	# добавляем дополнительное пользовательское ограничения
+	@abstractmethod
 	def add_custom_constr(self, expr):
-		raise NotImplementedError("add_custom_constr")
+		pass
+		# raise NotImplementedError("add_custom_constr")
 
 	# получаем MIP-решение
+	@abstractmethod
 	def solve(self):
-		raise NotImplementedError("solve")
+		pass
+		# raise NotImplementedError("solve")
 ####################################################################################################
 # Обёртка PYOMO
 ####################################################################################################
