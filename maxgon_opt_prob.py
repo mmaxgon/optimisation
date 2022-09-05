@@ -121,6 +121,16 @@ class optimization_problem:
 			assert(n == self.nonlinear_constraints.n)
 		if not (self.objective is None):
 			assert(n == self.objective.n)
+
+	def if_linear(self):
+		if (self.objective.if_linear and (self.nonlinear_constraints is None)):
+			return True
+		return False
+
+	def if_continuous(self):
+		if ((self.dvars.ix_int is None) or (len(self.dvars.ix_int) == 0)):
+			return True
+		return False
 		
 ####################################################################################################
 # Получение нижней границы решения
@@ -835,6 +845,9 @@ def get_POA_solution(
 	random_points_count=0,          # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
 	nlp_solver="SCIPY"
 ):
+	# Если задача непрерывная - решаем NLP
+	if opt_prob.if_continuous():
+		return get_relaxed_solution(opt_prob, nlp_solver=nlp_solver)
 	# добавление линейных ограничений в качестве касательных к нелинейной функции цели в точке x
 	def add_obj_constraints(x, dvar_x, fx=None):
 		if fx is None:

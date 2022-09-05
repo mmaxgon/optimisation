@@ -1,7 +1,7 @@
 ####################################################################################################
 # MINLP with Polyhedral Outer Approximation
 # Решение сложных MINLP задач с помощью описания на одном из фреймворков
-# PYOMO, MIP, GOOGLE CP_SAT, GOOGLE Linear Solver (SCIP/CBC), GEKKO, CPLEX (MP/CP)
+# PYOMO, MIP, GOOGLE CP_SAT, GOOGLE Linear Solver (SCIP/CBC), GEKKO, CPLEX (MP/CP), SCIP
 ####################################################################################################
 import copy
 import numpy as np
