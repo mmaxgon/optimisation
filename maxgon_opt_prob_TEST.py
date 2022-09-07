@@ -71,7 +71,8 @@ objective_lin_fun = mg_opt.objective(
 	n=3,
 	if_linear=True,
 	fun=lin_obj,
-	lin_coeffs=[2., 3., 4.])
+	lin_coeffs=None
+)
 
 # Линейные ограничения
 lin_cons = mg_opt.linear_constraints(

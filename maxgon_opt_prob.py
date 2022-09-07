@@ -20,6 +20,7 @@ import mip as mip
 ####################################################################################################
 # Объекты абстрактного описания задачи
 ####################################################################################################
+diff_epsilon = 1e-9
 # Два варианта описания: старый через namedtuple и новый через dataclass (python >= 3.7)
 # Границы
 # bounds = namedtuple("bounds", ["lb", "ub"])
@@ -45,10 +46,12 @@ class dvars:
 	def __post_init__(self):
 		self.ix_int = np.array(self.ix_int)
 		self.ix_cont = np.array(self.ix_cont)
-		self.x0 = np.array(self.x0)
 		assert(len(np.intersect1d(self.ix_int, self.ix_cont, assume_unique=True, return_indices=False)) == 0)
 		assert(len(np.union1d(self.ix_int, self.ix_cont)) == self.n)
-		if not (self.x0 is None):
+		if self.x0 is None:
+			self.x0 = np.ndarray(shape=(self.n), dtype=np.float64)
+		else:
+			self.x0 = np.array(self.x0)
 			assert(len(self.x0) == self.n)
 		assert(len(self.bounds.ub) == len(self.bounds.lb) == self.n)
 
@@ -62,9 +65,15 @@ class objective:
 	lin_coeffs: np.array = None
 	def __post_init__(self):
 		if self.if_linear:
+			# если функция линейная
+			if (self.lin_coeffs is None) and (not (self.fun is None)):
+				# коэффициенты не заданы, зато задана функция
+				# - рассчитываем коэффициенты как производную от функции в 0
+				self.lin_coeffs = opt.approx_fprime(np.ndarray(shape=(self.n)), self.fun, epsilon=diff_epsilon)
 			assert(not(self.lin_coeffs is None))
 			assert(len(self.lin_coeffs) == self.n)
 		else:
+			assert(self.lin_coeffs is None)
 			assert(not (self.fun is None))
 
 # Линейные ограничения
@@ -236,7 +245,7 @@ def get_relaxed_solution(
 			def objective(self, x):
 				return opt_prob.objective.fun(x)
 			def gradient(self, x):
-				return opt.approx_fprime(x, self.objective, epsilon=1e-8)
+				return opt.approx_fprime(x, self.objective, epsilon=diff_epsilon)
 			def constraints(self, x):
 				_cons = [
 					np.matmul(opt_prob.linear_constraints.A, x),
@@ -248,7 +257,7 @@ def get_relaxed_solution(
 					_cons.append(custom_nonlinear_constraints.fun(x))
 				return np.concatenate(_cons)
 			def jacobian(self, x):
-				return opt.slsqp.approx_jacobian(x, self.constraints, epsilon=1e-8)
+				return opt.slsqp.approx_jacobian(x, self.constraints, epsilon=diff_epsilon)
 		cl = [opt_prob.linear_constraints.bounds.lb, opt_prob.nonlinear_constraints.bounds.lb]
 		cu = [opt_prob.linear_constraints.bounds.ub, opt_prob.nonlinear_constraints.bounds.ub]
 		if custom_linear_constraints is not None:
@@ -696,7 +705,7 @@ def get_feasible_solution2(opt_prob, x_nlp, nlp_solver="SCIPY"):
 		# ДАЛЕЕ ПРЕДПОЛАГАЕМ, ЧТО НЕЛИНЕЙНЫЕ ОГРАНИЧЕНИЯ ВЫГЛЯДЯТ КАК g(x) <= 0, Т.Е., ВЕРХНЯЯ ГРАНИЦА 0, А НИЖНЕЙ НЕТ
 		ix_violated = np.where(np.array(opt_prob.nonlinear_constraints.fun(x_milp)) > 0)[0]
 		# добавляем линеаризованные ограничения
-		gradg = opt.slsqp.approx_jacobian(x_milp, lambda x: np.array(opt_prob.nonlinear_constraints.fun(x))[ix_violated], epsilon=1e-9)
+		gradg = opt.slsqp.approx_jacobian(x_milp, lambda x: np.array(opt_prob.nonlinear_constraints.fun(x))[ix_violated], epsilon=diff_epsilon)
 		gx = np.array(opt_prob.nonlinear_constraints.fun(x_milp))[ix_violated]
 		for i in range(len(ix_violated)):
 			expr = gx[i] + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= 0
@@ -852,7 +861,7 @@ def get_POA_solution(
 	def add_obj_constraints(x, dvar_x, fx=None):
 		if fx is None:
 			fx = opt_prob.objective.fun(x)
-		gradf = opt.approx_fprime(x, opt_prob.objective.fun, epsilon=1e-9)
+		gradf = opt.approx_fprime(x, opt_prob.objective.fun, epsilon=diff_epsilon)
 		expr = fx + sum(gradf[j] * (dvar_x[j] - x[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
 		print(expr)
 		if (str(expr) != "True"):
@@ -873,7 +882,7 @@ def get_POA_solution(
 		gradg = opt.slsqp.approx_jacobian(
 			x,
 			lambda y: np.array(opt_prob.nonlinear_constraints.fun(y))[ix],
-			epsilon=1e-9
+			epsilon=diff_epsilon
 		)
 		ub = np.array(opt_prob.nonlinear_constraints.bounds.ub)[ix]
 		for i in range(len(ix)):
@@ -1045,7 +1054,15 @@ def get_POA_solution(
 			if (lower_bound > upper_bound):
 				raise ValueError("lower_bound > upper_bound!")
 			if (upper_bound - lower_bound < obj_tolerance):
-				res = {"obj": upper_bound, "x": best_sol, "step_num": step_num-random_points_count, "nonlin_constr_num": len(non_lin_cons), "objective_constr_num": len(obj_cons)}
+				res = {
+					"obj": upper_bound,
+					"x": best_sol,
+					"step_num": step_num-random_points_count,
+					"nonlin_constr_num": len(non_lin_cons),
+					"objective_constr_num": len(obj_cons),
+					"lower_bound": lower_bound,
+					"upper_bound": upper_bound
+				}
 				print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
 				return res
 		else:
