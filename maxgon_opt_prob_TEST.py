@@ -37,7 +37,6 @@ c3: x[2]^2 + x[3]^2 <= 12;
 ####################################################################################################
 # Описание задачи
 ####################################################################################################
-importlib.reload(mg_opt)
 # Начальное значение
 x0 = [0., 0., 0.]
 
@@ -121,71 +120,80 @@ opt_prob_lin = mg_opt.optimization_problem(
 print(opt_prob_lin.if_linear())
 
 ####################################################################################################
-# Получение нижней границы решения как решение NLP-Задачи
-####################################################################################################
-# Нижняя граница как решение NLP-задачи
-res_NLP_SCIPY = mg_opt.get_relaxed_solution(
-	opt_prob, nlp_solver="SCIPY",
-	options = {"verbose": 4, "maxiter": 100}
-)
-print(res_NLP_SCIPY)
-res_NLP_NLOPT = mg_opt.get_relaxed_solution(
-	opt_prob,
-	nlp_solver="NLOPT",
-	options={"xtol_abs": 1e-9}
-)
-print(res_NLP_NLOPT)
-res_NLP_IPOPT = mg_opt.get_relaxed_solution(
-	opt_prob,
-	nlp_solver="IPOPT",
-	options={"tol": 1e-4, "print_level": 4}
-)
-print(res_NLP_IPOPT)
-
-####################################################################################################
-# Получение допустимого решения как приближения непрерывного
-####################################################################################################
-init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP_SCIPY["x"], nlp_solver="SCIPY")
-print(init_feasible1)
-
-init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP_SCIPY["x"], nlp_solver="NLOPT")
-print(init_feasible2)
-
-####################################################################################################
-# Получение решения методом Polyhedral Outer Approximation
+# Получение решения
 ####################################################################################################
 # Нелинейная задача
-nonlin_sol = mg_opt.get_POA_solution(
-	opt_prob,
-	if_nlp_lower_bound=True,
-	if_refine=False,
-	if_project=True,
-	random_points_count=0,
-	nlp_solver="NLOPT"
+nonlin_sol = mg_opt.get_solution(
+	opt_prob=opt_prob,          # описание задачи
+	obj_tolerance=1e-4,         # разница между upper_bound и lower_bound
+	if_nlp_lower_bound=True,    # нужно ли рассчитывать нижнюю границу NLP-задачи в начале
+	if_refine=False,            # нужно ли после каждого MILP-решения фиксировать целочисленные переменные и уточнять непрерывные
+	if_project=True,            # нужно ли проецировать недопустимое решение на допустимое множество и строить касательные к нелинейным ограничениям в точке проекции
+	random_points_count=0,      # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
+	nlp_solver="NLOPT",         # NLP-солвер, MILP-солвер зашит MIP CBC
+	max_step_num=10             # максимальное число итераций POA
+	,var_decomp=(2, 4, 2)       # разбиение допустимого диапазона переменных на отрезки: tuple из чисел не сколько отрезков надо разбить диапазон значений каждой переменной
+	,max_iterations=10          # максимальное число итераций для глобального солвера
+	,max_evaluations=10         # максимальное число вызовов оценки цели глобальным солвером
 )
 print(nonlin_sol)
 
 # Линейная задача
-lin_sol = mg_opt.get_POA_solution(
-	opt_prob_lin,
+lin_sol = mg_opt.get_solution(
+	opt_prob=opt_prob_lin,
 	if_nlp_lower_bound=False,
 	if_refine=False,
 	if_project=False,
-	random_points_count=0
+	random_points_count=0,
+	max_step_num=10
 )
 print(lin_sol)
 
-####################################################################################################
-# Получение решения методом Branch and Bound
-####################################################################################################
-# Нелинейная задача
-bb_nonlin_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="SCIPY")
-print(bb_nonlin_sol)
-bb_nonlin_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="IPOPT")
-print(bb_nonlin_sol)
-bb_nonlin_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="NLOPT")
-print(bb_nonlin_sol)
 
-# Линейная задача
-bb_lin_sol = mg_opt.get_BB_solution(opt_prob_lin, int_eps=1e-4)
-print(bb_lin_sol)
+
+# ####################################################################################################
+# # Получение нижней границы решения как решение NLP-Задачи
+# ####################################################################################################
+# # Нижняя граница как решение NLP-задачи
+# res_NLP_SCIPY = mg_opt.get_relaxed_solution(
+# 	opt_prob, nlp_solver="SCIPY",
+# 	options = {"verbose": 4, "maxiter": 100}
+# )
+# print(res_NLP_SCIPY)
+# res_NLP_NLOPT = mg_opt.get_relaxed_solution(
+# 	opt_prob,
+# 	nlp_solver="NLOPT",
+# 	options={"xtol_abs": 1e-9}
+# )
+# print(res_NLP_NLOPT)
+# res_NLP_IPOPT = mg_opt.get_relaxed_solution(
+# 	opt_prob,
+# 	nlp_solver="IPOPT",
+# 	options={"tol": 1e-4, "print_level": 4}
+# )
+# print(res_NLP_IPOPT)
+#
+# ####################################################################################################
+# # Получение допустимого решения как приближения непрерывного
+# ####################################################################################################
+# init_feasible1 = mg_opt.get_feasible_solution1(opt_prob, res_NLP_SCIPY["x"], nlp_solver="SCIPY")
+# print(init_feasible1)
+#
+# init_feasible2 = mg_opt.get_feasible_solution2(opt_prob, res_NLP_SCIPY["x"], nlp_solver="NLOPT")
+# print(init_feasible2)
+
+
+# ####################################################################################################
+# # Получение решения методом Branch and Bound
+# ####################################################################################################
+# # Нелинейная задача
+# bb_nonlin_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="SCIPY")
+# print(bb_nonlin_sol)
+# bb_nonlin_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="IPOPT")
+# print(bb_nonlin_sol)
+# bb_nonlin_sol = mg_opt.get_BB_solution(opt_prob, int_eps=1e-4, nlp_solver="NLOPT")
+# print(bb_nonlin_sol)
+#
+# # Линейная задача
+# bb_lin_sol = mg_opt.get_BB_solution(opt_prob_lin, int_eps=1e-4)
+# print(bb_lin_sol)

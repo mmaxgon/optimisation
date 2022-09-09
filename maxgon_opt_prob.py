@@ -14,6 +14,7 @@ import scipy.optimize as opt
 import cyipopt
 import nlopt
 import mip as mip
+import rbfopt as rbf
 
 # from torch import tensor
 # from torch.nn.functional import gumbel_softmax
@@ -21,6 +22,9 @@ import mip as mip
 # Объекты абстрактного описания задачи
 ####################################################################################################
 diff_epsilon = 1e-9
+bounds_epsilon = 1e-6
+big_num = 1e6
+
 # Два варианта описания: старый через namedtuple и новый через dataclass (python >= 3.7)
 # Границы
 # bounds = namedtuple("bounds", ["lb", "ub"])
@@ -354,9 +358,9 @@ def get_relaxed_solution(
 		nl_opt.set_lower_bounds(opt_prob.dvars.bounds.lb)
 		nl_opt.set_upper_bounds(opt_prob.dvars.bounds.ub)
 		if len(ix_eq) > 0:
-			nl_opt.add_equality_mconstraint(eq_cons, [1e-6] * len(ix_eq))
+			nl_opt.add_equality_mconstraint(eq_cons, [bounds_epsilon] * len(ix_eq))
 		if len(ix_ineq) > 0:
-			nl_opt.add_inequality_mconstraint(ineq_cons, [1e-6] * 2 * len(ix_ineq))
+			nl_opt.add_inequality_mconstraint(ineq_cons, [bounds_epsilon] * 2 * len(ix_ineq))
 		x0 = opt_prob.dvars.x0
 		ix_l = np.where(x0 < opt_prob.dvars.bounds.lb)[0]
 		ix_m = np.where(x0 > opt_prob.dvars.bounds.ub)[0]
@@ -517,7 +521,7 @@ def get_feasible_solution1(opt_prob, x_nlp, nlp_solver="SCIPY"):
 		# Получаем новое NLP-решение
 		res = get_relaxed_solution(new_opt_prob, nlp_solver=nlp_solver)
 		# Если допустимое решение нашли
-		if res["success"] and (res["constr_violation"] <= 1e-6):
+		if res["success"] and (res["constr_violation"] <= bounds_epsilon):
 			print(res)
 			# если не осталось больше целочисленных компонент, которые мы ещё не зафиксировали - задача решена
 			if len(ix_int) <= 1:
@@ -554,7 +558,7 @@ def get_feasible_solution1(opt_prob, x_nlp, nlp_solver="SCIPY"):
 			# Получаем новое NLP-решение
 			res = get_relaxed_solution(new_opt_prob, nlp_solver=nlp_solver)
 			# если допустимое решение не найдено - идём наверх с пустым
-			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
+			if not (res["success"] and (res["constr_violation"] <= bounds_epsilon)):
 				return None
 			# если допустимое решение найдено
 			print(res)
@@ -593,7 +597,7 @@ def get_feasible_solution1(opt_prob, x_nlp, nlp_solver="SCIPY"):
 			# Получаем новое NLP-решение
 			res = get_relaxed_solution(new_opt_prob, nlp_solver=nlp_solver)
 			# если допустимое решение не найдено - идём наверх с пустым
-			if not (res["success"] and (res["constr_violation"] <= 1e-6)):
+			if not (res["success"] and (res["constr_violation"] <= bounds_epsilon)):
 				return None
 			# если допустимое решение найдено
 			print(res)
@@ -714,7 +718,7 @@ def get_feasible_solution2(opt_prob, x_nlp, nlp_solver="SCIPY"):
 
 		# итерация NLP-приближения к MILP-решению
 		nlp_projector = NLP_projector.get_solution(x_milp)
-		if (not nlp_projector["success"]) or (nlp_projector["constr_violation"] >= 1e-6):
+		if (not nlp_projector["success"]) or (nlp_projector["constr_violation"] >= bounds_epsilon):
 			raise ValueError("Не найдено NLP-решение!!")
 		x_nlp = nlp_projector["x"]
 		print("NLP: " + str(x_nlp))
@@ -800,7 +804,7 @@ def get_feasible_solution2(opt_prob, x_nlp, nlp_solver="SCIPY"):
 #
 # 	results = {"obj": np.inf, "x": None, "constr_violation": None, "success": None}
 # 	def callback(xk, state):
-# 		if (state.fun < results["obj"]) and (state.constr_violation < 1e-6):
+# 		if (state.fun < results["obj"]) and (state.constr_violation < bounds_epsilon):
 # 			results["obj"] = state.fun
 # 			results["x"] = collect_x(state.x)
 # 			results["constr_violation"] = state.constr_violation
@@ -833,37 +837,28 @@ def get_feasible_solution2(opt_prob, x_nlp, nlp_solver="SCIPY"):
 # 	return res
 
 ####################################################################################################
-# Polyhedral Outer Approximation (mip+cbc)
+# Polyhedral Outer Approximation (mip cbc)
 ####################################################################################################
-# случайные точки внутри диапазона
-def generate_x(opt_prob):
-	x = []
-	for i in range(opt_prob.dvars.n):
-		lb = opt_prob.dvars.bounds.lb[i]
-		ub = opt_prob.dvars.bounds.ub[i]
-		res = np.random.randint(lb, ub) if i in opt_prob.dvars.ix_int else lb + (ub - lb) * np.random.random_sample()
-		x.append(res)
-	return x
-	
 def get_POA_solution(
 	opt_prob,                       # описание задачи
-	obj_tolerance=1e-6,             # разница между upper_bound и lower_bound
+	obj_tolerance=bounds_epsilon,   # разница между upper_bound и lower_bound
 	if_nlp_lower_bound=False,       # нужно ли рассчитывать нижнюю границу NLP-задачи в начале
 	if_refine=False,                # нужно ли после каждого MILP-решения фиксировать целочисленные переменные и уточнять непрерывные
 	if_project=False,               # нужно ли проецировать недопустимое решение на допустимое множество и строить касательные к нелинейным ограничениям в точке проекции
 	random_points_count=0,          # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
-	nlp_solver="SCIPY"
+	nlp_solver="SCIPY",             # NLP-солвер, MILP-солвер зашит MIP CBC
+	max_step_num=1e2                # максимальное число итераций
 ):
 	# Если задача непрерывная - решаем NLP
 	if opt_prob.if_continuous():
 		return get_relaxed_solution(opt_prob, nlp_solver=nlp_solver)
+
 	# добавление линейных ограничений в качестве касательных к нелинейной функции цели в точке x
 	def add_obj_constraints(x, dvar_x, fx=None):
 		if fx is None:
 			fx = opt_prob.objective.fun(x)
 		gradf = opt.approx_fprime(x, opt_prob.objective.fun, epsilon=diff_epsilon)
 		expr = fx + sum(gradf[j] * (dvar_x[j] - x[j]) for j in range(opt_prob.dvars.n)) <= model_milp.mu
-		print(expr)
 		if (str(expr) != "True"):
 			obj_cons.append(model_milp.add_constr(expr))
 	
@@ -887,19 +882,31 @@ def get_POA_solution(
 		ub = np.array(opt_prob.nonlinear_constraints.bounds.ub)[ix]
 		for i in range(len(ix)):
 			expr = gx[i] + sum(gradg[i][j] * (x_var[j] - x_milp[j]) for j in range(opt_prob.dvars.n)) <= ub[i]
-			print(expr)
 			if (str(expr) != "True"):
 				non_lin_cons.append(model_milp.add_constr(expr))
-	
+
+	# генерирует случайные точки внутри диапазона для улучшения начальной аппроксимации нелинейных ограничений и цели
+	def generate_x(opt_prob):
+		x = []
+		for i in range(opt_prob.dvars.n):
+			lb = opt_prob.dvars.bounds.lb[i]
+			ub = opt_prob.dvars.bounds.ub[i]
+			res = np.random.randint(lb, ub) if i in opt_prob.dvars.ix_int else lb + (
+						ub - lb) * np.random.random_sample()
+			x.append(res)
+		return x
+
 	# Рассчитываем решение NLP-задачи для получения нижней границы
 	if if_nlp_lower_bound:
 		res_NLP = get_relaxed_solution(opt_prob, nlp_solver=nlp_solver)
-		if not (res_NLP["success"] and res_NLP["constr_violation"] <= 1e-6):
+		if not (res_NLP["success"] and res_NLP["constr_violation"] <= bounds_epsilon):
 			raise ValueError("Нет NLP-решения!")
 		nlp_lower_bound = res_NLP["obj"]
+
 	# Объект для уточнения непрерывных переменных решения при фиксации целочисленных
 	if if_refine:
 		refiner_optimizer_obj = refiner_optimizer(opt_prob, nlp_solver=nlp_solver)
+
 	# Объект проекции недопустимого решения на допустимое множество
 	if if_project:
 		projector_optimizer_obj = projector_optimizer(opt_prob, nlp_solver=nlp_solver)
@@ -927,7 +934,7 @@ def get_POA_solution(
 	# индексы для непрерывных и целочисленных переменных
 	ix_cont = opt_prob.dvars.ix_cont
 	ix_int = opt_prob.dvars.ix_int
-	# все переменные решения
+	# объединяем все переменные решения в один вектор
 	x_var = []
 	num_cont = 0
 	num_int = 0
@@ -940,6 +947,7 @@ def get_POA_solution(
 			num_int += 1
 		else:
 			raise ValueError("Недопустимый индекс {0}!".format(i))
+
 	# линейные ограничения
 	lin_cons = []
 	if opt_prob.linear_constraints is not None:
@@ -951,6 +959,7 @@ def get_POA_solution(
 			if opt_prob.linear_constraints.bounds.lb[j] > -np.Inf:
 				expr2 = expr >= opt_prob.linear_constraints.bounds.lb[j]
 				lin_cons.append(model_milp.add_constr(expr2))
+
 	# ограничения при линеаризации нелинейных ограничений
 	non_lin_cons = []
 	# ограничения при линеаризации нелинейной функции цели
@@ -969,7 +978,7 @@ def get_POA_solution(
 			raise ValueError("Не задана функция цели или коэффициенты для линейной задачи")
 		obj_cons.append(model_milp.add_constr(lin_expr=opt_prob.objective.fun(x_var) <= model_milp.mu))
 	else:
-		model_milp.temp_mu = model_milp.add_constr(lin_expr=model_milp.mu >= -1e9)
+		model_milp.temp_mu = model_milp.add_constr(lin_expr=model_milp.mu >= -big_num)
 	# минимизируем вспомогательную переменную mu
 	model_milp.objective = mip.minimize(objective=model_milp.mu)
 	
@@ -988,7 +997,15 @@ def get_POA_solution(
 	
 	while True:
 		step_num += 1
-
+		res = {
+			"obj": upper_bound,
+			"x": best_sol,
+			"step_num": step_num - random_points_count,
+			"nonlin_constr_num": len(non_lin_cons),
+			"objective_constr_num": len(obj_cons),
+			"lower_bound": lower_bound,
+			"upper_bound": upper_bound
+		}
 		# Сначала генерим случайные точки и строим в них касательные к нелинейным объектам,
 		# чтобы лучше аппроксимировать нелинейные ограничения и функцию цели до начала решения MILP-задачи
 		if step_num <= random_points_count:
@@ -1023,7 +1040,7 @@ def get_POA_solution(
 		# фиксируем целочисленные переменные, оптимизируем по непрерывным
 		if if_refine:
 			refine = refiner_optimizer_obj.get_solution(x_milp)
-			if refine["success"] and refine["constr_violation"] < 1e-6:
+			if refine["success"] and refine["constr_violation"] < bounds_epsilon:
 				x_refine = refine["x"]
 				print("Refined: {0}".format(x_refine))
 				x_milp = x_refine
@@ -1054,6 +1071,7 @@ def get_POA_solution(
 			if (lower_bound > upper_bound):
 				raise ValueError("lower_bound > upper_bound!")
 			if (upper_bound - lower_bound < obj_tolerance):
+				# нашли решение
 				res = {
 					"obj": upper_bound,
 					"x": best_sol,
@@ -1069,7 +1087,7 @@ def get_POA_solution(
 			# проецируем решение вспомогательной задачи на допустимую область
 			if if_project:
 				project = projector_optimizer_obj.get_solution(x_milp)
-				if project["success"] and project["constr_violation"] < 1e-6:
+				if project["success"] and project["constr_violation"] < bounds_epsilon:
 					x_project = project["x"]
 					print("Projected: {0}".format(x_project))
 					x_milp = x_project
@@ -1079,6 +1097,98 @@ def get_POA_solution(
 			add_nonlin_constraints(x=x_milp, dvar_x=x_var, ix=ix_violated, gx=gx)
 
 		print("lower_bound: {0}, upper_bound: {1}".format(lower_bound, upper_bound))
+		if step_num >= max_step_num + random_points_count:
+			return res
+
+####################################################################################################
+# Глобальный оптимизатор для невыпуклых задач на POA
+####################################################################################################
+def get_solution(
+	opt_prob,                       # описание задачи
+	obj_tolerance=bounds_epsilon,   # разница между upper_bound и lower_bound
+	if_nlp_lower_bound=False,       # нужно ли рассчитывать нижнюю границу NLP-задачи в начале
+	if_refine=False,                # нужно ли после каждого MILP-решения фиксировать целочисленные переменные и уточнять непрерывные
+	if_project=False,               # нужно ли проецировать недопустимое решение на допустимое множество и строить касательные к нелинейным ограничениям в точке проекции
+	random_points_count=0,          # сколько случайных точек сгенерировать вместе с касательными к функции цели и нелинейным ограничениям в них до начала решения MILP-задачи
+	nlp_solver="SCIPY",             # NLP-солвер, MILP-солвер зашит MIP CBC
+	max_step_num=1e2,               # максимальное число итераций POA
+	var_decomp=None,                # разбиение допустимого диапазона переменных на отрезки: tuple из чисел на сколько отрезков надо разбить диапазон значений каждой переменной
+	max_iterations=10,              # максимальное число итераций для глобального солвера
+	max_evaluations=10              # максимальное число вызовов оценки цели глобальным солвером
+):
+	# Если задача выпуклая, то не разбиваем на подзадачи
+	if var_decomp is None:
+		return get_POA_solution(
+			opt_prob=opt_prob,
+			obj_tolerance=obj_tolerance,
+			if_nlp_lower_bound=if_nlp_lower_bound,
+			if_refine=if_refine,
+			if_project=if_project,
+			random_points_count=random_points_count,
+			nlp_solver=nlp_solver,
+			max_step_num=max_step_num
+		)
+
+	assert(len(var_decomp) == opt_prob.dvars.n)
+	assert(np.all(np.array(var_decomp) >= 1))
+	assert(np.all(np.array(var_decomp, dtype=np.int) == np.array(var_decomp)))
+
+	# Задача на нумерованном отрезке
+	lb = copy.deepcopy(opt_prob.dvars.bounds.lb)
+	ub = copy.deepcopy(opt_prob.dvars.bounds.ub)
+	step = 	(ub - lb) / np.array(var_decomp)
+	solution = [None]
+	goal = [np.inf]
+	def global_objective(t, goal, solution):
+		opt_prob.dvars.bounds.lb = lb + t * step
+		opt_prob.dvars.bounds.ub = lb + (t + 1) * step - bounds_epsilon
+		print("!!!!!!!!!!!!!!!!!!!!!!!!!!{0},{1}".format(opt_prob.dvars.bounds.lb, opt_prob.dvars.bounds.ub))
+		try:
+			res = get_POA_solution(
+				opt_prob=opt_prob,
+				obj_tolerance=obj_tolerance,
+				if_nlp_lower_bound=if_nlp_lower_bound,
+				if_refine=if_refine,
+				if_project=if_project,
+				random_points_count=random_points_count,
+				nlp_solver=nlp_solver,
+				max_step_num=max_step_num
+			)
+		except:
+			return np.inf
+		else:
+			if res["obj"] < goal[0]:
+				goal[0] = res["obj"]
+				solution[0] = res["x"]
+			return res["obj"]
+		finally:
+			opt_prob.dvars.bounds.lb = copy.deepcopy(lb)
+			opt_prob.dvars.bounds.ub = copy.deepcopy(ub)
+
+	# rbfopt
+	settings = rbf.RbfoptSettings(
+		max_iterations=max_iterations,
+		max_evaluations=max_evaluations,
+		algorithm="MSRSM",  # Gutmann
+		global_search_method="genetic"  # genetic sampling solver
+	)
+	dimension = opt_prob.dvars.n
+	var_lower = np.array([0.] * dimension)
+	var_upper = np.array(var_decomp, dtype=np.float64) - 1
+	var_type = ['I'] * dimension
+
+	bb = rbf.RbfoptUserBlackBox(
+		dimension = dimension,
+		var_lower = var_lower,
+		var_upper = var_upper,
+		var_type = var_type,
+		obj_funct = lambda t: global_objective(t, goal, solution),
+		obj_funct_noisy = None
+	)
+	alg = rbf.RbfoptAlgorithm(settings, bb)
+	(val, x, itercount, evalcount, fast_evalcount) = alg.optimize()
+	print(val, x, itercount, evalcount, fast_evalcount)
+	return {"x": solution[0], "obj": goal[0]}
 
 ####################################################################################################
 # Branch and Bound (scipy.optimize)
@@ -1174,7 +1284,7 @@ def get_BB_solution(
 			
 	def get_BB_solution_internal(opt_prob, global_vars):
 		res = get_relaxed_solution(opt_prob, nlp_solver)
-		if not(res["success"] and res["constr_violation"] <= 1e-6):
+		if not(res["success"] and res["constr_violation"] <= bounds_epsilon):
 			print("NO NLP")
 			return None
 		print(res)
