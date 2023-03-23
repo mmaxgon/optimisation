@@ -251,7 +251,7 @@ model_milp.lin_cons = pyomo.Constraint(expr=
 	opt_prob.linear_constraints.A[0][0] * model_milp.y[0] +
 	sum(opt_prob.linear_constraints.A[0][i] * model_milp.x[i] for i in opt_prob.dvars.ix_int) == opt_prob.linear_constraints.bounds.ub[0])
 
-approximation_points = [mg_opt.generate_x(opt_prob) for i in range(200)]
+approximation_points = [opt_prob.generate_x() for i in range(200)]
 # model_milp.obj = pyomo.Objective(expr = -model_milp.x[1], sense=pyomo.minimize)
 # sf = pyomo.SolverFactory("cbc", executable="C:\\Program Files\\solvers\\CBC\\bin\\cbc.exe")
 # sf.options["allowableGap"] = 1e-4

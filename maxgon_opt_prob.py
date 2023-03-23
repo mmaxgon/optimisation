@@ -144,7 +144,17 @@ class optimization_problem:
 		if ((self.dvars.ix_int is None) or (len(self.dvars.ix_int) == 0)):
 			return True
 		return False
-		
+
+	# генерирует случайные точки внутри диапазона для улучшения начальной аппроксимации нелинейных ограничений и цели
+	def generate_x(self):
+		x = []
+		for i in range(self.dvars.n):
+			lb = self.dvars.bounds.lb[i]
+			ub = self.dvars.bounds.ub[i]
+			res = np.random.randint(lb, ub) if i in self.dvars.ix_int else lb + (
+					ub - lb) * np.random.random_sample()
+			x.append(res)
+		return x
 ####################################################################################################
 # Получение нижней границы решения
 ####################################################################################################
