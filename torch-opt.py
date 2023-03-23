@@ -6,7 +6,7 @@ def do_armijo_step(x0, fx0, gradx0, goal_func):
 	grad_norm2 = (sum(gradx0 ** 2)).data.item()
 	alpha = 1
 	xn = x0 - alpha * gradx0
-	fxn = goal(xn).data.item()
+	fxn = goal_func(xn).data.item()
 	while np.isinf(fxn) or fx0 - fxn < 0.5 * alpha * grad_norm2:
 		alpha /= 2
 		xn = x0 - alpha * gradx0
@@ -15,7 +15,7 @@ def do_armijo_step(x0, fx0, gradx0, goal_func):
 ###################################################################
 def max0(x, if_diff=True):
 	if if_diff:
-		res = torch.nn.functional.softplus(x, beta=1e3, threshold = 1e-1)
+		res = torch.nn.functional.softplus(x, beta=1e3, threshold=1e-1)
 	else:
 		res = torch.relu(x)
 	return res
@@ -47,16 +47,20 @@ def goal(x):
 	return obj(x) + \
 		(1/(2*penalty)) * \
 		(
-			torch.sum(max0(penalty * ineq_cons_fun(x) + u)**2) +
+			torch.sum(max0(penalty * ineq_cons_fun(x) + u, if_diff=True)**2) +
 			torch.sum((penalty * eq_cons_fun(x) + v)**2)
 	    )
 print(goal(x))
 
 def renew_lagrange(u, v, x):
-	u = torch.relu(u + penalty * ineq_cons_fun(x)).clone().detach()
+	u = max0(u + penalty * ineq_cons_fun(x), if_diff=False).clone().detach()
 	v = (v + penalty * eq_cons_fun(x)).clone().detach()
-	return (u,v)
+	return (u, v)
 
+"""
+Решение:
+'x': array([0.60295854, 2.48721496, 2.33647461]), 'obj': -978.8963660834414
+"""
 # CUSTOM Armijo
 x = torch.tensor(data=[0.]*n, dtype=torch.float, requires_grad=True)
 v = torch.tensor([0.]*k)
