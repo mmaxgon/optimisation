@@ -197,7 +197,8 @@ results = pyomo.SolverFactory('glpk').solve(model)
 print(model.X.value, model.Y.value)
 
 ##########################
-# NBIG
+# Piecewise linear with NBIG
+##########################
 NBIG = 100
 xdata = [1., 3., 6., 10.]
 ydata = [6.,2.,8.,7.]
@@ -222,15 +223,15 @@ model.b = pyomo.Var(ix, domain=pyomo.Binary)
 model.l = pyomo.Var(ix2, domain=pyomo.NonNegativeReals, bounds=(0, 1))
 
 # только один b[i] = 1, и в этом диапазоне находится x:
-model.b_cons = pyomo.Constraint(expr = sum(model.b[i] for i in ix) == 1)
+model.b_cons = pyomo.Constraint(expr=sum(model.b[i] for i in ix) == 1)
 model.b_cons.pprint()
 
 # x и y являются выпуклой комбинацией соседних точек с коэффициентами l[2*i] и l[2*i+1]
 model.l_cons = pyomo.ConstraintList()
 model.l_cons.clear()
 # x и y являются выпуклой комбинацией всех точек с коэффициентами l[2*i] и l[2*i+1] (только 2 соседних ненулевые)
-model.l_cons.add(expr = model.X == sum(xdata[i]*model.l[2*i] + xdata[i+1]*model.l[2*i+1] for i in ix))
-model.l_cons.add(expr = model.Y == sum(ydata[i]*model.l[2*i] + ydata[i+1]*model.l[2*i+1] for i in ix))
+model.l_cons.add(expr=model.X == sum(xdata[i]*model.l[2*i] + xdata[i+1]*model.l[2*i+1] for i in ix))
+model.l_cons.add(expr=model.Y == sum(ydata[i]*model.l[2*i] + ydata[i+1]*model.l[2*i+1] for i in ix))
 for i in ix:
 	# только 2 соседних коэффициента l[2*i] и l[2*i+1] отличны от 0 (дают в сумме 1) и определяются сотв. диапазоном b[i]
 	expr = model.l[2*i] + model.l[2*i+1] == model.b[i]
@@ -247,3 +248,14 @@ results = pyomo.SolverFactory('glpk').solve(model)
 print([model.b[i].value for i in ix])
 print([model.l[i].value for i in ix2])
 print(model.X.value, model.Y.value)
+
+##########################
+# Экспорт задачи из pyomo
+##########################
+from pyomo.repn.standard_repn import generate_standard_repn
+for c in CUS:
+	repn = generate_standard_repn(model.dmd[c].body)
+	for var in repn.linear_vars:
+		print(var)
+	print(c, repn.linear_coefs)
+	print(generate_standard_repn(model.dmd[c].lb).constant)
