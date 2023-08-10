@@ -49,7 +49,7 @@ def goal(x):
 		(
 			torch.sum(max0(penalty * ineq_cons_fun(x) + u, if_diff=True)**2) +
 			torch.sum((penalty * eq_cons_fun(x) + v)**2)
-	    )
+		)
 print(goal(x))
 
 def renew_lagrange(u, v, x):
@@ -87,7 +87,7 @@ print("grad norm: {0}".format(d))
 x = torch.tensor(data=[0.]*n, dtype=torch.float, requires_grad=True)
 v = torch.tensor([0.]*k)
 u = torch.tensor([0.]*m)
-opt = torch.optim.Adam([x], lr=0.1)
+opt = torch.optim.Adam([x], lr=0.01)
 for i in range(int(1e3)):
 	val = goal(x)
 	print("goal: {0}, objective: {1}".format(val.data.item(), obj(x)))
@@ -96,7 +96,7 @@ for i in range(int(1e3)):
 	opt.step()
 	print("data: {0}".format(x.data))
 	print("gradient: {0}".format(x.grad))
-u, v = renew_lagrange(u, v, x)
+(u, v) = renew_lagrange(u, v, x)
 print("u: {0}, v: {1}".format(u, v))
 print("eq_cons: {0} ineq_cons: {1}".format(eq_cons_fun(x), ineq_cons_fun(x)))
 d = torch.norm(x.grad).data.item()
@@ -105,6 +105,18 @@ print("grad norm: {0}".format(d))
 ##########################################################################
 # Целочисленные ограничения
 ##########################################################################
+"""
+Кодируем целочисленные переменные в вектора длины их диапазона - one-hot-encoding соответствующего целого числа.
+Для кодирования используем дифференцируемый вариант soft argmax - взвешиваем значения экспонентами.
+Из векторов кодировок умножая на [0,1,2,3,..] получаем целые числа, которые попадают во все ограничения и функцию цели.
+
+Оптимальное решение: 
+'obj': -977.9375, 'x': [1.75, 2.0, 2.0]
+
+Получается допустимое решение:
+'obj': -976.4530, 'x': [2.5984, 2.0000, 1.0000]
+"""
+
 c = torch.tensor([0., 1., 2., 3])
 y = torch.tensor([0.], requires_grad=True)
 print(y)
@@ -125,7 +137,7 @@ def collect_x(y, z):
 
 v = torch.tensor([0.]*k)
 u = torch.tensor([0.]*m)
-opt = torch.optim.Adam([y, z], lr=0.1)
+opt = torch.optim.Adam([y, z], lr=0.01)
 for i in range(int(1e3)):
 	x = collect_x(y, z)
 	val = goal(x)
@@ -137,3 +149,7 @@ for i in range(int(1e3)):
 	print("gradient: {0}{1}".format(y.grad, z.grad))
 u, v = renew_lagrange(u, v, x)
 print("u: {0}, v: {1}".format(u, v))
+print("eq_cons: {0} ineq_cons: {1}".format(eq_cons_fun(x), ineq_cons_fun(x)))
+print("grad norm: {0}".format(torch.norm(torch.cat([y.grad, z.grad.flatten()]))))
+
+
