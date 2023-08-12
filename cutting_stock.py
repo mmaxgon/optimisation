@@ -3,11 +3,11 @@ import scipy.linalg as la
 import scipy.optimize as opt
 
 # Длина доски
-L = 10
+L = 15
 # Длины брусков
-l_lens = [1, 3, 5]
+l_lens = [1, 3, 5, 7]
 # Потребности в брусках
-l_demands = np.array([19, 9, 7])
+l_demands = np.array([19, 9, 7, 5])
 # Число разных брусков
 l_count = len(l_lens)
 
@@ -51,7 +51,7 @@ sol_master = solve_master_problem()
 # Итерируем
 for i in range(100):
 	sol_knapsack = solve_knapsack_problem(sol_master)
-	if 1 + sol_knapsack.fun < -1e-4:
+	if 1 + sol_knapsack.fun < -1e-5:
 		patterns = np.hstack([patterns, sol_knapsack.x.reshape(-1, 1)])
 		sol_master = solve_master_problem()
 	else:
@@ -68,11 +68,11 @@ import numpy as np
 from pyscipopt import Model as scip_Model
 
 # Длина доски
-L = 10
+L = 15
 # Длины брусков
-l_lens = [1, 3, 5]
+l_lens = [1, 3, 5, 7]
 # Потребности в брусках
-l_demands = np.array([19, 9, 7])
+l_demands = np.array([19, 9, 7, 5])
 # Число разных брусков
 l_count = len(l_lens)
 
