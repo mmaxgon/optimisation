@@ -8,6 +8,8 @@ pe.SolverFactory('symphony').available()
 pe.SolverFactory('bonmin').available()
 pe.SolverFactory('couenne').available()
 pe.SolverFactory('shot').available()
+pe.SolverFactory('highs').available()
+pe.SolverFactory('gecode').available()
 
 Demand = {
 	'Lon': 125,  # London
@@ -104,6 +106,8 @@ model.write('c:\\temp\\problem.nl')
 ##################################################################################3
 results = pe.SolverFactory('glpk').solve(model)
 results = pe.SolverFactory('cbc').solve(model)
+results = pe.SolverFactory('highs').solve(model)
+results = pe.SolverFactory('gecode').solve(model)
 
 results = pe.SolverFactory('ipopt').solve(model)
 
