@@ -1,6 +1,7 @@
 """
 https://developers.google.com/optimization/reference/python/sat/python/cp_model
 https://github.com/google/or-tools/blob/stable/ortools/sat/samples/
+https://github.com/d-krupke/cpsat-primer
 """
 
 ###########################################################################

@@ -2,6 +2,7 @@
 # https://github.com/scipopt/PySCIPOpt
 # https://scipopt.github.io/PySCIPOpt/docs/html/classpyscipopt_1_1scip_1_1Model.html
 # custom constraints: https://github.com/scipopt/PySCIPOpt/blob/master/tests/test_conshdlr.py
+# parameters: https://www.scipopt.org/doc/html/PARAMETERS.php
 
 import numpy as np
 from pyscipopt import Model as scip_Model

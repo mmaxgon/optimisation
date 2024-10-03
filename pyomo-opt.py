@@ -1,14 +1,16 @@
 import pyomo.environ as pe
 
 pe.SolverFactory('cbc').available()
+pe.SolverFactory('clp').available()
 pe.SolverFactory('glpk').available()
 pe.SolverFactory('ipopt').available()
 pe.SolverFactory('mindtpy').available()
-pe.SolverFactory('symphony').available()
+# pe.SolverFactory('symphony').available()
 pe.SolverFactory('bonmin').available()
 pe.SolverFactory('couenne').available()
 pe.SolverFactory('shot').available()
 pe.SolverFactory('highs').available()
+pe.SolverFactory('scip').available()
 pe.SolverFactory('gecode').available()
 
 Demand = {
@@ -105,20 +107,20 @@ model.dmd = pe.Constraint(CUS, rule=constr_demand)
 model.write('c:\\temp\\problem.nl')
 ##################################################################################3
 results = pe.SolverFactory('glpk').solve(model)
-results = pe.SolverFactory('cbc').solve(model)
+results = pe.SolverFactory("cbc").solve(model)
 results = pe.SolverFactory('highs').solve(model)
-results = pe.SolverFactory('gecode').solve(model)
+results = pe.SolverFactory('scip').solve(model)
 
+results = pe.SolverFactory("clp").solve(model)
 results = pe.SolverFactory('ipopt').solve(model)
 
+# results = pe.SolverFactory('gecode').solve(model)
 results = pe.SolverFactory('bonmin').solve(model)
 results = pe.SolverFactory('couenne').solve(model)
 results = pe.SolverFactory('shot').solve(model, keepfiles=True)
-results = pe.SolverFactory('mindtpy').solve(model, mip_solver='cbc', nlp_solver='ipopt')
+# results = pe.SolverFactory('mindtpy').solve(model, mip_solver='cbc', nlp_solver='ipopt')
 
-results = pe.SolverFactory('symphony').solve(model)
-
-results.write()
+# results = pe.SolverFactory('symphony').solve(model)
 
 # Solution
 for c in CUS:

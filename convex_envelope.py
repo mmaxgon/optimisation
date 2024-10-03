@@ -65,6 +65,7 @@ def get_convex_envelope_value(x_val, hull):
 	Returns:
 		значение функции-аппроксимации выпуклой оболочки
 	"""
+	# Ax + by <= c - уравнение полуплоскости
 	A = hull.equations[:, 0:-2]
 	b = hull.equations[:, -2]
 	c = hull.equations[:, -1]
