@@ -1,16 +1,21 @@
+from sys import executable
+
 import pyomo.environ as pe
 
-pe.SolverFactory('cbc').available()
-pe.SolverFactory('clp').available()
+pe.SolverFactory('cbc', executable="C:\\Program Files\\solvers\\cbc\\bin\\cbc.exe").available()
+pe.SolverFactory('asl:cbc', executable="C:\\Program Files\\solvers-asl\\coin\\cbc.exe").available()
+pe.SolverFactory('clp', executable="C:\\Program Files\\solvers\\cbc\\bin\\clp.exe").available()
 pe.SolverFactory('glpk').available()
 pe.SolverFactory('ipopt').available()
 pe.SolverFactory('mindtpy').available()
 # pe.SolverFactory('symphony').available()
-pe.SolverFactory('bonmin').available()
-pe.SolverFactory('couenne').available()
-pe.SolverFactory('shot').available()
+pe.SolverFactory('asl:bonmin', executable="C:\\Program Files\\solvers-asl\\coin\\bonmin.exe").available()
+pe.SolverFactory('bonmin', executable="C:\\Program Files\\solvers\\bonmin\\bonmin.exe").available()
+pe.SolverFactory('couenne', executable="C:\\Program Files\\solvers\\couenne\\couenne.exe").available()
+pe.SolverFactory('asl:couenne', executable="C:\\Program Files\\solvers-asl\\coin\\couenne.exe").available()
+pe.SolverFactory('asl:shot').available()
 pe.SolverFactory('asl:highs').available()
-pe.SolverFactory('scip').available()
+pe.SolverFactory('asl:scip').available()
 pe.SolverFactory('gecode').available()
 
 Demand = {
@@ -118,20 +123,30 @@ def print_solution():
 
 ##################################################################################3
 pe.SolverFactory('glpk').solve(model); print_solution()
-pe.SolverFactory("asl:cbc").solve(model); print_solution()
-pe.SolverFactory('asl:highs').solve(model); print_solution()
-pe.SolverFactory('scip').solve(model); print_solution()
 
-# results = pe.SolverFactory("clp").solve(model)
-pe.SolverFactory('ipopt').solve(model); print_solution()
+pe.SolverFactory("cbc", executable="C:\\Program Files\\solvers\\cbc\\bin\\cbc.exe").solve(model); print_solution()
+pe.SolverFactory("asl:cbc", executable="C:\\Program Files\\solvers-asl\\coin\\cbc.exe").solve(model); print_solution()
+
+pe.SolverFactory('asl:highs', executable="C:\\Program Files\\solvers\\highs\\bin\\highs.exe").solve(model); print_solution()
+pe.SolverFactory('asl:highs', executable="C:\\Program Files\\solvers-asl\\highs\\bin\\highs.exe").solve(model); print_solution()
+
+pe.SolverFactory('asl:scip', executable="C:\\Program Files\\solvers\\scip\\bin\\scip.exe").solve(model); print_solution()
+pe.SolverFactory('asl:scip', executable="C:\\Program Files\\solvers-asl\\scip\\bin\\scip.exe").solve(model); print_solution()
+
+# pe.SolverFactory("clp", executable="C:\\Program Files\\solvers\\cbc\\bin\\clp.exe").solve(model); print_solution()
+
+pe.SolverFactory('ipopt', executable="C:\\Program Files\\solvers\\ipopt\\ipopt.exe").solve(model); print_solution()
+pe.SolverFactory('asl:ipopt', executable="C:\\Program Files\\solvers-asl\\coin\\ipopt.exe").solve(model); print_solution()
 
 # results = pe.SolverFactory('gecode').solve(model)
-pe.SolverFactory('bonmin').solve(model); print_solution()
-pe.SolverFactory('couenne').solve(model); print_solution()
-pe.SolverFactory('shot').solve(model, keepfiles=True); print_solution()
-# pe.SolverFactory('mindtpy').solve(model, mip_solver='glpk', nlp_solver='ipopt'); print_solution()
+pe.SolverFactory('bonmin', executable="C:\\Program Files\\solvers\\bonmin\\bonmin.exe").solve(model); print_solution()
+pe.SolverFactory('asl:bonmin', executable="C:\\Program Files\\solvers-asl\\coin\\bonmin.exe").solve(model); print_solution()
 
-# results = pe.SolverFactory('symphony').solve(model)
+pe.SolverFactory('couenne', executable="C:\\Program Files\\solvers\\couenne\\couenne.exe").solve(model); print_solution()
+pe.SolverFactory('asl:couenne', executable="C:\\Program Files\\solvers-asl\\coin\\couenne.exe").solve(model); print_solution()
+
+pe.SolverFactory('shot').solve(model, keepfiles=True); print_solution()
+# pe.SolverFactory('mindtpy').solve(model, mip_solver='cbc', nlp_solver='ipopt'); print_solution()
 
 ##########################
 model.x.domain = pe.Reals
