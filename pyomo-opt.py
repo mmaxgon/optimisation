@@ -9,7 +9,7 @@ pe.SolverFactory('mindtpy').available()
 pe.SolverFactory('bonmin').available()
 pe.SolverFactory('couenne').available()
 pe.SolverFactory('shot').available()
-pe.SolverFactory('highs').available()
+pe.SolverFactory('asl:highs').available()
 pe.SolverFactory('scip').available()
 pe.SolverFactory('gecode').available()
 
@@ -105,34 +105,35 @@ model.dmd = pe.Constraint(CUS, rule=constr_demand)
 #     model.dmd.add(sum([model.x[c,s] for s in SRC]) == Demand[c])
 
 model.write('c:\\temp\\problem.nl')
-##################################################################################3
-results = pe.SolverFactory('glpk').solve(model)
-results = pe.SolverFactory("cbc").solve(model)
-results = pe.SolverFactory('highs').solve(model)
-results = pe.SolverFactory('scip').solve(model)
 
-results = pe.SolverFactory("clp").solve(model)
-results = pe.SolverFactory('ipopt').solve(model)
+# Solution
+def print_solution():
+	for c in CUS:
+		for s in SRC:
+			print(c, s, model.x[c, s](), model.y[c, s]())
+	# Goal
+	print(model.Cost())
+	# Duals
+	# model.dual.display()
+
+##################################################################################3
+pe.SolverFactory('glpk').solve(model); print_solution()
+pe.SolverFactory("asl:cbc").solve(model); print_solution()
+pe.SolverFactory('asl:highs').solve(model); print_solution()
+pe.SolverFactory('scip').solve(model); print_solution()
+
+# results = pe.SolverFactory("clp").solve(model)
+pe.SolverFactory('ipopt').solve(model); print_solution()
 
 # results = pe.SolverFactory('gecode').solve(model)
-results = pe.SolverFactory('bonmin').solve(model)
-results = pe.SolverFactory('couenne').solve(model)
-results = pe.SolverFactory('shot').solve(model, keepfiles=True)
-# results = pe.SolverFactory('mindtpy').solve(model, mip_solver='cbc', nlp_solver='ipopt')
+pe.SolverFactory('bonmin').solve(model); print_solution()
+pe.SolverFactory('couenne').solve(model); print_solution()
+pe.SolverFactory('shot').solve(model, keepfiles=True); print_solution()
+# pe.SolverFactory('mindtpy').solve(model, mip_solver='glpk', nlp_solver='ipopt'); print_solution()
 
 # results = pe.SolverFactory('symphony').solve(model)
 
-# Solution
-for c in CUS:
-	for s in SRC:
-		print(c, s, model.x[c, s](), model.y[c, s]())
-
-# Goal
-print(model.Cost())
-
-# Duals
-model.dual.display()
-
+##########################
 model.x.domain = pe.Reals
 # model.x.domain = pe.NonNegativeIntegers
 
