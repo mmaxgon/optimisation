@@ -1,7 +1,9 @@
+from sys import executable
 from time import time
 import numpy as np
 from dataclasses import dataclass
 import pyomo.environ as py
+import sys; print('Python %s on %s' % (sys.version, sys.platform))
 
 ############################################################################
 # Data
@@ -31,7 +33,7 @@ movie_names = list(movies.keys())
 
 @dataclass
 class Hall:
-	supported_formats: list[movie_formats]      # поддерживаемые форматы
+	supported_formats: list     # поддерживаемые форматы
 	max_shows: int                              # максимальное число сеансов
 	def __post_init__(self):
 		assert(type(self.supported_formats) is list)
@@ -100,10 +102,19 @@ for h in hall_names:
 for h in hall_names:
 	for m in movie_names:
 		d = movies[m].len
+		# Число фильмов в зале за промежуток времени d не должно превышать d / минимальная длительность фильма
+		big_m = int(np.ceil(d / min([movies[mov].len for mov in movies.keys()])))
+		# big_m = NBIG
 		for tstart in range(T):
 			tend = min(tstart + d, T - 1)
-			#print(d, tstart, tend)
-			model.shows_not_intersect.add(NBIG * model.x[h, m, tstart] + sum(model.x[h, m1, t] for t in range(tstart + 1, tend + 1) for m1 in movie_names) <= NBIG)
+			print(d, tstart, tend)
+			# BIG M
+			model.shows_not_intersect.add(
+				big_m * model.x[h, m, tstart] + sum(model.x[h, m1, t] for t in range(tstart + 1, tend + 1) for m1 in movie_names) <= big_m \
+			)
+			# Clique Lifting
+			# for t in range(tstart + 1, tend + 1):
+			# 	model.shows_not_intersect.add(model.x[h, m, tstart] + sum(model.x[h, m1, t] for m1 in movie_names) <= 1)
 
 ############################################################################
 # Objective
@@ -118,6 +129,8 @@ model.sales = py.Objective(
 # Solve
 ############################################################################
 solver = py.SolverFactory('cbc')
+solver.options = {}
+# solver = py.SolverFactory('asl:scip', executable="C:\\Program Files\\solvers-asl\\scip\\bin\\scip.exe")
 start_time = time()
 result = solver.solve(model)
 end_time = time()
@@ -130,7 +143,7 @@ if status == py.TerminationCondition.optimal or status == py.TerminationConditio
 		for t in period:
 			for m in movie_names:
 				if model.x[h, m, t]() > 0.5:
-					print("hall {0}, time {1}, movie {2}, value {3}".format(h, t, m, model.x[h, m, t]()))
+					print("hall: {0}, start: {1}, movie: {2}, duration: {3}".format(h, t, m, movies[m].len))
 else:
 	print('No solution found.')
 
