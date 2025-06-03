@@ -128,6 +128,7 @@ for (ixh, h) in enumerate(hall_names):
 
 model.setObjective(sum(sales[m][t] * model_x[ixh][ixm][t] for (ixh, h) in enumerate(hall_names) for (ixm, m) in enumerate(movie_names) for t in period), sense='maximize')
 
+model.writeProblem(filename="scip_problem_init.lp", trans=False, genericnames=False)
 ############################################################################
 # Solve
 ############################################################################
@@ -147,6 +148,8 @@ end_time = time()
 
 status = model.getStatus()
 print(status)
+
+model.writeProblem(filename="scip_problem.lp", trans=True, genericnames=False)
 
 ############################################################################
 # Solution
