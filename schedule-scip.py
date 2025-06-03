@@ -2,13 +2,14 @@ from sys import executable
 from time import time
 import numpy as np
 from dataclasses import dataclass
-import pyomo.environ as py
+from pyscipopt import Model as scip_Model
 import sys; print('Python %s on %s' % (sys.version, sys.platform))
 
 ############################################################################
 # Data
 ############################################################################
 
+NBIG = 100
 T = 24
 period = range(T)
 
@@ -61,91 +62,103 @@ sales = {
 # Модель
 ############################################################################
 
-model = py.ConcreteModel()
+model = scip_Model("SCIP Schedule")
 
 ############################################################################
 # Decision vars
 ############################################################################
 
-model.x = py.Var(hall_names, movie_names, period, domain=py.Binary)
-# model.x = py.Var(hall_names, movie_names, period, domain=py.Reals, bounds=(0, 1))
+# vtype: type of the variable: 'C' continuous, 'I' integer, 'B' binary, and 'M' implicit integer
+model_x = [[[model.addVar(name=f"x[{h},{m},{t}]", vtype="B") for t in period] for m in movie_names] for h in hall_names]
 
 ############################################################################
 # Constraints
 ############################################################################
-NBIG = 100
 
 # Максиммальное и минимальное число фильмов
-model.show_ranges = py.ConstraintList()
-for m in movie_names:
-	model.show_ranges.add(sum(model.x[h, m, t] for h in hall_names for t in period) <= movies[m].max)
-	model.show_ranges.add(sum(model.x[h, m, t] for h in hall_names for t in period) >= movies[m].min)
+constr_show_ranges = []
+for (ixm, m) in enumerate(movie_names):
+	constr_show_ranges.append(
+		model.addCons(sum(model_x[ixh][ixm][t] for (ixh, h) in enumerate(hall_names) for t in period) >= movies[m].min)
+	)
+	constr_show_ranges.append(
+		model.addCons(sum(model_x[ixh][ixm][t] for (ixh, h) in enumerate(hall_names) for t in period) <= movies[m].max)
+	)
+
 
 # Фильмы только в поддерживаемых формат заллах
-model.movie_hall_formats = py.ConstraintList()
-for m in movie_names:
+constr_movie_hall_formats = []
+for (ixm, m) in enumerate(movie_names):
 	allowed_h = movie_halls[m]
-	for h in hall_names:
+	for (ixh, h) in enumerate(hall_names):
 		if not (h in allowed_h):
-			model.movie_hall_formats.add(sum(model.x[h, m, t] for t in period) == 0)
+			constr_movie_hall_formats.append(model.addCons(sum(model_x[ixh][ixm][t] for t in period) == 0))
 			
 """
 Непересечение сеансов можно задать через линейные логические неравенства с использованием NBIG,
 а можно через клики
 """		
 # в каждом зале в каждый момент времени начинается не больше одного сеанса
-model.shows_not_intersect = py.ConstraintList()
-for h in hall_names:
+constr_shows_not_intersect = []
+for (ixh, h) in enumerate(hall_names):
 	for t in period:
-		model.shows_not_intersect.add(sum(model.x[h, m, t] for m in movie_names) <= 1)
+		constr_shows_not_intersect.append(model.addCons(sum(model_x[ixh][ixm][t] for (ixm, m) in enumerate(movie_names)) <= 1))
+
 # сеансы не пересекаются
-for h in hall_names:
-	for m in movie_names:
+for (ixh, h) in enumerate(hall_names):
+	for (ixm, m) in enumerate(movie_names):
 		d = movies[m].len
 		# Число фильмов в зале за промежуток времени d не должно превышать d / минимальная длительность фильма
 		big_m = int(np.ceil(d / min([movies[mov].len for mov in movies.keys()])))
-		# big_m = NBIG
+		big_m = NBIG
 		for tstart in range(T):
 			tend = min(tstart + d, T - 1)
-			print(d, tstart, tend)
+			# print(d, tstart, tend)
 			# BIG M
-			model.shows_not_intersect.add(
-				big_m * model.x[h, m, tstart] + sum(model.x[h, m1, t] for t in range(tstart + 1, tend + 1) for m1 in movie_names) <= big_m \
+			constr_shows_not_intersect.append(
+				model.addCons(big_m * model_x[ixh][ixm][tstart] + sum(model_x[ixh][ixm1][t] for t in range(tstart + 1, tend + 1) for (ixm1, m1) in enumerate(movie_names)) <= big_m) \
 			)
 			# Cliques
 			# for t in range(tstart + 1, tend + 1):
-			# 	model.shows_not_intersect.add(model.x[h, m, tstart] + sum(model.x[h, m1, t] for m1 in movie_names) <= 1)
+			# 	constr_shows_not_intersect.add(model.addCons(model_x[ixh][ixm][tstart] + sum(model_x[ixh][ixm1][t] for (ixm1, m1) in enumerate(movie_names)) <= 1))
 
 ############################################################################
 # Objective
 ############################################################################
 
-model.sales = py.Objective(
-	expr=sum(sales[m][t] * model.x[h, m, t] for h in hall_names for m in movie_names for t in period),
-	sense=py.maximize
-)
+model.setObjective(sum(sales[m][t] * model_x[ixh][ixm][t] for (ixh, h) in enumerate(hall_names) for (ixm, m) in enumerate(movie_names) for t in period), sense='maximize')
 
 ############################################################################
 # Solve
 ############################################################################
-solver = py.SolverFactory('cbc')
-solver.options = {}
-# solver = py.SolverFactory('asl:scip', executable="C:\\Program Files\\solvers-asl\\scip\\bin\\scip.exe")
+model.getParam("constraints/setppc/cliquelifting")
+model.getParam("display/verblevel")
+
+model.setParam("display/verblevel", 5)
+model.setParam('limits/time', 600)
+model.setParam('constraints/setppc/cliquelifting', True)
+
+model.hideOutput()
+model.setLogfile("scip_log.txt")
 start_time = time()
-result = solver.solve(model)
+model.optimize()
+sol = model.getBestSol()
 end_time = time()
-status = result.Solver()["Termination condition"]
+
+status = model.getStatus()
+print(status)
+
 ############################################################################
 # Solution
 ############################################################################
-if status == py.TerminationCondition.optimal or status == py.TerminationCondition.feasible:
-	for h in hall_names:
+if status == "optimal":
+	for (ixh, h) in enumerate(hall_names):
 		for t in period:
-			for m in movie_names:
-				if model.x[h, m, t]() > 0.5:
+			for (ixm, m) in enumerate(movie_names):
+				if sol[model_x[ixh][ixm][t]] > 0:
 					print("hall: {0}, start: {1}, movie: {2}, duration: {3}".format(h, t, m, movies[m].len))
 else:
 	print('No solution found.')
 
-print(model.sales())
+print(model.getObjVal())
 print(end_time - start_time)

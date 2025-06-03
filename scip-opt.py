@@ -1,4 +1,4 @@
-# conda install -c conda-forge pyscipopt
+# pip install pyscipopt
 # https://github.com/scipopt/PySCIPOpt
 # https://scipopt.github.io/PySCIPOpt/docs/html/classpyscipopt_1_1scip_1_1Model.html
 # custom constraints: https://github.com/scipopt/PySCIPOpt/blob/master/tests/test_conshdlr.py
@@ -44,6 +44,7 @@ scip_model.setObjective(scip_model_mu, sense='minimize')
 print(str(scip_model.getObjective()) != "Expr({})" and str(scip_model.getObjective()) != "")
 
 scip_model.setParam('limits/time', 600)
+scip_model.setParam('constraints/setppc/cliquelifting', True)
 
 # решаем
 scip_model.optimize()
