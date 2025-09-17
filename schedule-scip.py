@@ -153,7 +153,11 @@ for (ixh, h) in enumerate(hall_names):
 
 # Проверяем и добавляем решение
 accepted = model.addSol(sol_1, free=False)
-print(f"Warm start solution accepted: {accepted}")
+if accepted:
+	print(f"Warm start solution was accepted: {accepted}")
+	print(model.getSolObjVal(sol_1))
+else:
+	print(f"Warm start solution was not accepted: {accepted}")
 
 # model.getParam("constraints/setppc/cliquelifting")
 # model.getParam("display/verblevel")
@@ -187,7 +191,7 @@ if status in ("optimal", "gaplimit"):
 else:
 	print('No solution found.')
 
-print(model.getObjVal())
+print(model.getSolObjVal(sol))
 print(end_time - start_time)
 
 # sol_x = [[[int(model.getVal(model_x[ixh][ixm][t])) for t in period] for (ixm, m) in enumerate(movie_names)] for (ixh, h) in enumerate(hall_names)]
