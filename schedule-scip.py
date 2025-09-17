@@ -2,7 +2,7 @@ from sys import executable
 from time import time
 import numpy as np
 from dataclasses import dataclass
-from pyscipopt import Model as scip_Model
+import pyscipopt as scip
 import sys; print('Python %s on %s' % (sys.version, sys.platform))
 
 ############################################################################
@@ -62,7 +62,7 @@ sales = {
 # Модель
 ############################################################################
 
-model = scip_Model("SCIP Schedule")
+model = scip.Model("SCIP Schedule")
 
 ############################################################################
 # Decision vars
@@ -116,7 +116,9 @@ for (ixh, h) in enumerate(hall_names):
 			# print(d, tstart, tend)
 			# BIG M
 			constr_shows_not_intersect.append(
-				model.addCons(big_m * model_x[ixh][ixm][tstart] + sum(model_x[ixh][ixm1][t] for t in range(tstart + 1, tend + 1) for (ixm1, m1) in enumerate(movie_names)) <= big_m) \
+				model.addCons(
+					big_m * model_x[ixh][ixm][tstart] + sum(model_x[ixh][ixm1][t]
+					for t in range(tstart + 1, tend + 1) for (ixm1, m1) in enumerate(movie_names)) <= big_m)
 			)
 			# Cliques
 			# for t in range(tstart + 1, tend + 1):
@@ -132,14 +134,36 @@ model.writeProblem(filename="scip_problem_init.lp", trans=False, genericnames=Fa
 ############################################################################
 # Solve
 ############################################################################
-model.getParam("constraints/setppc/cliquelifting")
-model.getParam("display/verblevel")
+sol_x = [[[0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+ [[1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
+ [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+  [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]]]
 
-model.setParam("display/verblevel", 5)
+# sol_1 = model.createPartialSol()
+sol_1 = model.createSol()
+for (ixh, h) in enumerate(hall_names):
+	for t in period:
+		for (ixm, m) in enumerate(movie_names):
+			model.setSolVal(sol_1, model_x[ixh][ixm][t], int(sol_x[ixh][ixm][t]))
+
+# Проверяем и добавляем решение
+accepted = model.addSol(sol_1, free=False)
+print(f"Warm start solution accepted: {accepted}")
+
+# model.getParam("constraints/setppc/cliquelifting")
+# model.getParam("display/verblevel")
+# model.setParam("display/verblevel", 5)
 model.setParam('limits/time', 600)
-model.setParam('constraints/setppc/cliquelifting', True)
+# model.setParam('constraints/setppc/cliquelifting', True)
+model.setPresolve(scip.SCIP_PARAMSETTING.OFF)
+model.setParam("limits/gap", 10)
 
-model.hideOutput()
+# model.hideOutput()
 model.setLogfile("scip_log.txt")
 start_time = time()
 model.optimize()
@@ -154,7 +178,7 @@ model.writeProblem(filename="scip_problem.lp", trans=True, genericnames=False)
 ############################################################################
 # Solution
 ############################################################################
-if status == "optimal":
+if status in ("optimal", "gaplimit"):
 	for (ixh, h) in enumerate(hall_names):
 		for t in period:
 			for (ixm, m) in enumerate(movie_names):
@@ -165,3 +189,6 @@ else:
 
 print(model.getObjVal())
 print(end_time - start_time)
+
+# sol_x = [[[int(model.getVal(model_x[ixh][ixm][t])) for t in period] for (ixm, m) in enumerate(movie_names)] for (ixh, h) in enumerate(hall_names)]
+
