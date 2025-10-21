@@ -117,9 +117,11 @@ def do_last_step(patterns):
 
 go = True
 while go:
-    (go, patterns, obj) = do_one_step(patterns)
+    (go, patterns, rel_obj) = do_one_step(patterns)
     print(patterns)
 
+print(f"ЦФ релаксированная: {rel_obj}")
 (res, obj) = do_last_step(patterns)
+print(f"ЦФ целочисленная: {obj}")
 print(res)
 
