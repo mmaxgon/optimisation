@@ -11,6 +11,10 @@ MINLP Price Optimization with Neural Network Demand Forecast (BONMIN Solver)
 1. Функция генерации возвращает данные + все параметры для обучения и оптимизации
 2. Обучение нейросети (PyTorch)
 3. Оптимизация через pyomo + bonmin (встраивание формулы из обученной нейросети)
+
+Сравнение:
+- GroupDemandNet: нейросеть с линейными слоями + активации
+- PolynomialDemandModel: полиномиальная модель (степень <= 2)
 """
 
 import os
@@ -22,6 +26,8 @@ import numpy as np
 from typing import List, Tuple, Dict, Optional
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
+from itertools import combinations_with_replacement
+import time
 
 # Pyomo и bonmin solver
 from pyomo.environ import (SolverFactory, SolverStatus, ConcreteModel, Var,
@@ -183,16 +189,79 @@ class GroupDemandNet(nn.Sequential):
 
 
 # =============================================================================
+# POLYNOMIAL DEMAND MODEL (from price-opt_formula.py)
+# =============================================================================
+
+class PolynomialDemandModel(nn.Module):
+    """
+    Полиномиальная модель спроса с ограничениями на квадратичные члены.
+
+    Формула для каждого выхода i:
+    y_i = bias[i]
+          + sum(j) linear[i,j] * x_j
+          + sum(j not in prices) quadratic[i,j] * x_j^2  # НЕТ квадратичных членов для цен!
+          + sum(j<k) interaction[i,j,k] * x_j * x_k
+
+    ВАЖНО: Квадратичные члены НЕ используются для цен (prices), только для контекста.
+    """
+
+    def __init__(self, input_dim: int, output_dim: int, n_prices: int):
+        super().__init__()
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+        self.n_prices = n_prices
+
+        self.linear = nn.Parameter(torch.randn(output_dim, input_dim) * 0.1)
+
+        n_quad_vars = input_dim - n_prices
+        self.quadratic = nn.Parameter(torch.randn(output_dim, n_quad_vars) * 0.01)
+
+        n_pairs = input_dim * (input_dim - 1) // 2
+        self.interaction = nn.Parameter(torch.randn(output_dim, n_pairs) * 0.01)
+
+        self.bias = nn.Parameter(torch.randn(output_dim) * 0.1)
+
+        self._pair_indices = [(j, k) for j in range(input_dim) for k in range(j + 1, input_dim)]
+        self._quadratic_indices = list(range(n_prices, input_dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size = x.shape[0]
+
+        linear_term = torch.matmul(x, self.linear.T)
+
+        x_quad = x[:, self._quadratic_indices] ** 2
+        quadratic_term = torch.matmul(x_quad, self.quadratic.T)
+
+        interaction_term = torch.zeros(batch_size, self.output_dim, device=x.device)
+        for pair_idx, (j, k) in enumerate(self._pair_indices):
+            interaction_term += (x[:, j] * x[:, k]).unsqueeze(1) * self.interaction[:, pair_idx].unsqueeze(0)
+
+        output = self.bias + linear_term + quadratic_term + interaction_term
+        return output
+
+    def get_coefficients(self) -> Dict[str, np.ndarray]:
+        return {
+            'linear': self.linear.detach().numpy().copy(),
+            'quadratic': self.quadratic.detach().numpy().copy(),
+            'quadratic_indices': self._quadratic_indices,
+            'interaction': self.interaction.detach().numpy().copy(),
+            'bias': self.bias.detach().numpy().copy(),
+            'pair_indices': self._pair_indices,
+            'n_prices': self.n_prices
+        }
+
+
+# =============================================================================
 # TRAINING (same as price-opt_ml.py)
 # =============================================================================
 
-def train_demand_network(demand_net: GroupDemandNet,
+def train_demand_network(demand_net: nn.Module,
                          train_inputs: torch.Tensor,
                          train_outputs: torch.Tensor,
                          norm_params: NormalizationParams,
                          epochs: int = 200,
-                         lr: float = 0.01) -> GroupDemandNet:
-    """Обучает нейросеть."""
+                         lr: float = 0.01) -> nn.Module:
+    """Обучает нейросеть (работает с любой nn.Module, включая GroupDemandNet и PolynomialDemandModel)."""
     print("="*70)
     print("ОБУЧЕНИЕ НЕЙРОСЕТИ")
     print("="*70 + "\n")
@@ -601,6 +670,277 @@ class PriceOptimizerBONMIN:
         return results
 
 
+class PriceOptimizerPolynomialPyomo:
+    """
+    Универсальный МИНЛП оптимизатор для полиномиальной модели спроса.
+    Работает с любым solver через pyomo (bonmin, couenne).
+    """
+
+    def __init__(self,
+                 demand_net: PolynomialDemandModel,
+                 norm_params: NormalizationParams,
+                 problem_params: ProblemParams,
+                 solver_name: str = "bonmin",
+                 solver_path: str = r"C:\distr\solvers\bonmin.exe",
+                 min_profit_margin: float = 0.20):
+        self.demand_net = demand_net
+        self.norm_params = norm_params
+        self.problem_params = problem_params
+        self.solver_name = solver_name
+        self.solver_path = solver_path
+        self.min_profit_margin = min_profit_margin
+        self.coeffs = demand_net.get_coefficients()
+
+    def optimize(self,
+                context_cont: Optional[np.ndarray] = None,
+                time_limit: int = 300) -> Dict:
+        n_products = self.problem_params.n_products
+        n_context_cont = self.problem_params.n_context_cont
+        n_context_bin = self.problem_params.n_context_bin
+
+        if context_cont is None:
+            context_cont = np.zeros(n_context_cont)
+
+        print("\n" + "="*70)
+        print(f"МИНЛП ОПТИМИЗАЦИЯ ЦЕН (PYOMO + {self.solver_name.upper()}, ПОЛИНОМИАЛЬНАЯ МОДЕЛЬ)")
+        print("="*70 + "\n")
+
+        # ======================================================================
+        # CREATE PYOMO MODEL
+        # ======================================================================
+
+        model = ConcreteModel()
+
+        # Create index sets
+        model.products = RangeSet(0, n_products - 1)
+        model.context_bin_idx = RangeSet(0, n_context_bin - 1)
+        model.context_cont_idx = RangeSet(0, n_context_cont - 1)
+        model.input_idx = RangeSet(0, n_products + n_context_cont + n_context_bin - 1)
+
+        # Decision variables: prices
+        def price_bounds(model, i):
+            min_p, max_p = self.problem_params.price_ranges[i]
+            return (min_p, max_p)
+        model.price = Var(model.products, within=Reals, bounds=price_bounds)
+
+        # Context binary variables
+        model.context_bin = Var(model.context_bin_idx, within=Binary)
+
+        # Fixed context continuous variables
+        def context_cont_bounds(model, i):
+            return (context_cont[i], context_cont[i])
+        model.context_cont = Var(model.context_cont_idx, within=Reals, bounds=context_cont_bounds)
+
+        # Constraint: max one promo
+        model.max_one_promo = Constraint(expr=sum(model.context_bin[i] for i in model.context_bin_idx) <= 1)
+
+        # ======================================================================
+        # NORMALIZED INPUT VARIABLES
+        # ======================================================================
+
+        # Helper to get all input variables in order
+        def get_input_var(model, i):
+            if i < n_products:
+                return model.price[i]
+            elif i < n_products + n_context_cont:
+                return model.context_cont[i - n_products]
+            else:
+                return model.context_bin[i - n_products - n_context_cont]
+
+        # Normalized input variables
+        model.input_norm = Var(model.input_idx, within=Reals, bounds=(-10, 10))
+
+        def normalization_rule(model, i):
+            var = get_input_var(model, i)
+            mean = self.norm_params.input_means[i]
+            std = self.norm_params.input_stds[i]
+            return model.input_norm[i] * std == var - mean
+        model.normalization = Constraint(model.input_idx, rule=normalization_rule)
+
+        # ======================================================================
+        # POLYNOMIAL DEMAND MODEL (FORMULA)
+        # ======================================================================
+
+        print("Построение полиномиальных выражений спроса...")
+
+        model.demand_norm = Var(model.products, within=Reals, bounds=(0, 1))
+
+        def polynomial_demand_rule(model, i):
+            """Строит полиномиальное выражение для продукта i."""
+            expr = self.coeffs['bias'][i]
+
+            # Linear terms
+            for j in range(self.coeffs['linear'].shape[1]):
+                expr += self.coeffs['linear'][i, j] * model.input_norm[j]
+
+            # Quadratic terms (only for non-price variables)
+            for quad_idx, var_idx in enumerate(self.coeffs['quadratic_indices']):
+                expr += self.coeffs['quadratic'][i, quad_idx] * (model.input_norm[var_idx] ** 2)
+
+            # Interaction terms
+            for pair_idx, (j, k) in enumerate(self.coeffs['pair_indices']):
+                expr += self.coeffs['interaction'][i, pair_idx] * model.input_norm[j] * model.input_norm[k]
+
+            return model.demand_norm[i] == expr
+
+        model.polynomial_demand = Constraint(model.products, rule=polynomial_demand_rule)
+
+        print(f"[OK] Построено {n_products} полиномиальных выражений\n")
+
+        # ======================================================================
+        # DEMAND VARIABLES (DENORMALIZED)
+        # ======================================================================
+
+        def demand_bounds(model, i):
+            return (0, self.norm_params.output_max[i])
+        model.demand = Var(model.products, within=NonNegativeReals, bounds=demand_bounds)
+
+        def denormalization_rule(model, i):
+            return model.demand[i] == model.demand_norm[i] * self.norm_params.output_max[i]
+        model.denormalization = Constraint(model.products, rule=denormalization_rule)
+
+        # ======================================================================
+        # OBJECTIVE AND CONSTRAINTS
+        # ======================================================================
+
+        # Revenue expression
+        def revenue_rule(model):
+            return sum(model.price[i] * model.demand[i] for i in model.products)
+
+        # Cost expression
+        def cost_expr(model):
+            return sum(self.problem_params.costs[i] * model.demand[i] for i in model.products)
+
+        # Profit expression
+        profit_expr = revenue_rule(model) - cost_expr(model)
+
+        # Minimum profit margin constraint
+        model.profit_margin = Constraint(expr=profit_expr >= self.min_profit_margin * revenue_rule(model))
+
+        # ======================================================================
+        # OBJECTIVE: Need auxiliary variable for SCIP (nonlinear objective not supported)
+        # ======================================================================
+        max_revenue = sum(self.problem_params.price_ranges[i][1] * self.norm_params.output_max[i]
+                         for i in range(n_products))
+
+        if self.solver_name == "scip":
+            # SCIP requires linear objective - use auxiliary variable
+            model.revenue_var = Var(within=Reals, bounds=(0, max_revenue))
+            model.revenue_def = Constraint(expr=model.revenue_var == revenue_rule(model))
+            model.objective = Objective(expr=model.revenue_var, sense=maximize)
+        else:
+            # Bonmin and Couenne support nonlinear objectives directly
+            model.objective = Objective(expr=revenue_rule(model), sense=maximize)
+
+        # ======================================================================
+        # SOLVE WITH SOLVER
+        # ======================================================================
+
+        print("Информация о модели:")
+        print(f"  Переменных: {len(list(model.component_data_objects(Var)))}")
+        print(f"  Ограничений: {len(list(model.component_data_objects(Constraint)))}")
+        print()
+
+        print(f"Решение через {self.solver_name} (solver: {self.solver_path})...")
+
+        solver = SolverFactory(self.solver_name, executable=self.solver_path)
+
+        # Different time limit options for different solvers
+        if self.solver_name == "couenne":
+            # Couenne uses 'max_time' instead of 'time_limit'
+            solver.options['max_time'] = time_limit
+        else:
+            # Bonmin uses 'bonmin.time_limit'
+            solver.options[f'{self.solver_name}.time_limit'] = time_limit
+
+        # Solve with tee=False to suppress solver output
+        try:
+            result = solver.solve(model, tee=False)
+        except Exception as e:
+            print(f"Ошибка при решении: {e}")
+            # Fallback: solve without time limit
+            solver2 = SolverFactory(self.solver_name, executable=self.solver_path)
+            result = solver2.solve(model, tee=False)
+
+        print(f"Статус solver: {result.solver.status}")
+        print(f"Статус pyomo: {result.solver.termination_condition}")
+
+        return self._extract_results(model, result)
+
+    def _extract_results(self, model, result) -> Dict:
+        """Извлекает результаты из решенной модели."""
+        results = {
+            'status': 'unknown',
+            'optimal_prices': [],
+            'demands': [],
+            'revenues': [],
+            'profits': [],
+            'active_promos': [],
+            'total_revenue': 0,
+            'total_profit': 0,
+            'profit_margin': 0,
+            'solver_status': str(result.solver.status),
+            'termination_condition': str(result.solver.termination_condition)
+        }
+
+        try:
+            for i in range(self.problem_params.n_products):
+                price = model.price[i].value
+                demand = model.demand[i].value
+
+                if price is None or demand is None:
+                    raise ValueError("Variable values not set")
+
+                revenue = price * demand
+                profit = (price - self.problem_params.costs[i]) * demand
+
+                results['optimal_prices'].append(float(price))
+                results['demands'].append(float(demand))
+                results['revenues'].append(float(revenue))
+                results['profits'].append(float(profit))
+
+            results['status'] = 'optimal'
+
+            print("\n" + "="*70)
+            print(f"РЕШЕНИЕ НАЙДЕНО ({self.solver_name.upper()} + ПОЛИНОМ)")
+            print("="*70 + "\n")
+
+            for i in range(self.problem_params.n_products):
+                print(f"Товар {i+1}:")
+                print(f"  Цена: {results['optimal_prices'][i]:.2f}")
+                print(f"  Спрос: {results['demands'][i]:.2f}")
+                print(f"  Выручка: {results['revenues'][i]:.2f}")
+                print(f"  Прибыль: {results['profits'][i]:.2f}")
+                print(f"  Себестоимость: {self.problem_params.costs[i]:.2f}\n")
+
+            active_promos = []
+            for p in range(self.problem_params.n_context_bin):
+                val = model.context_bin[p].value
+                if val is not None and val > 0.5:
+                    active_promos.append(p)
+                    results['active_promos'].append(p)
+
+            if active_promos:
+                print(f"Активные промо-механики: {active_promos}\n")
+            else:
+                print("Активные промо-механики: нет\n")
+
+            results['total_revenue'] = sum(results['revenues'])
+            results['total_profit'] = sum(results['profits'])
+            results['profit_margin'] = results['total_profit'] / results['total_revenue']
+
+            print(f"ОБЩАЯ ВЫРУЧКА: {results['total_revenue']:.2f}")
+            print(f"ОБЩАЯ ПРИБЫЛЬ: {results['total_profit']:.2f}")
+            print(f"МАРЖА: {results['profit_margin'] * 100:.1f}%")
+            print(f"Ограничение мин. маржи: {self.min_profit_margin * 100:.1f}%")
+        except Exception as e:
+            print(f"\nОшибка при извлечении результатов: {e}")
+            print(f"Статус: {results['solver_status']}")
+            print(f"Termination: {results['termination_condition']}")
+
+        return results
+
+
 def value(pyomo_var):
     """Получает значение переменной pyomo."""
     try:
@@ -678,6 +1018,330 @@ def visualize_results(optimizer: PriceOptimizerBONMIN, results: Dict) -> None:
     plt.savefig('price_optimization_results_bonmin.png', dpi=150, bbox_inches='tight')
     print("\nГрафик сохранен: price_optimization_results_bonmin.png")
     plt.show()
+
+
+# =============================================================================
+# BENCHMARK: PYSCIPOPT vs BONMIN (POLYNOMIAL MODEL)
+# =============================================================================
+
+def benchmark_polynomial_model(bonmin_time_limit=120):
+    """
+    Сравнение производительности pyscipopt, bonmin, couenne
+    на одной и той же полиномиальной модели спроса.
+    """
+    from pyscipopt import Model, quicksum
+
+    n_products = 3
+    n_context_cont = 2
+    n_context_bin = 2
+
+    print("="*70)
+    print("БЕНЧМАРК: PYSCIP vs BONMIN vs COUENNE (ПОЛИНОМ)")
+    print("="*70 + "\n")
+
+    # ======================================================================
+    # STEP 1: Генерация данных
+    # ======================================================================
+    print("ШАГ 1: Генерация данных\n")
+
+    data = generate_training_data(
+        n_products=n_products,
+        n_context_cont=n_context_cont,
+        n_context_bin=n_context_bin,
+        n_samples=3000
+    )
+
+    train_inputs = data['train_inputs']
+    train_outputs = data['train_outputs']
+    norm_params = data['norm_params']
+    problem_params = data['problem_params']
+
+    print(f"  Примеров: {train_inputs.shape[0]}")
+    print(f"  Размерность входа: {train_inputs.shape[1]}")
+    print(f"  Размерность выхода: {train_outputs.shape[1]}")
+    print(f"\n  Параметры задачи:")
+    print(f"    Товаров: {problem_params.n_products}")
+    print(f"    Себестоимости: {problem_params.costs}")
+    print(f"    Диапазоны цен: {problem_params.price_ranges}")
+    print()
+
+    # ======================================================================
+    # STEP 2: Обучение полиномиальной модели
+    # ======================================================================
+    print("ШАГ 2: Обучение полиномиальной модели\n")
+
+    input_dim = n_products + n_context_cont + n_context_bin
+
+    demand_net = PolynomialDemandModel(
+        input_dim=input_dim,
+        output_dim=n_products,
+        n_prices=n_products
+    )
+
+    # Обучаем модель (используем train_demand_network, он работает с любой nn.Module)
+    demand_net = train_demand_network(
+        demand_net=demand_net,
+        train_inputs=train_inputs,
+        train_outputs=train_outputs,
+        norm_params=norm_params,
+        epochs=500,
+        lr=0.01
+    )
+
+    # Валидация
+    print("Валидация...")
+    val_data = generate_training_data(
+        n_products=n_products,
+        n_context_cont=n_context_cont,
+        n_context_bin=n_context_bin,
+        n_samples=500,
+        seed=123
+    )
+    val_inputs_norm = (val_data['train_inputs'] - torch.FloatTensor(norm_params.input_means)) / torch.FloatTensor(norm_params.input_stds)
+    val_outputs_norm = val_data['train_outputs'] / torch.FloatTensor(norm_params.output_max)
+
+    with torch.no_grad():
+        val_preds = demand_net(val_inputs_norm)
+        mae = torch.mean(torch.abs(val_preds * torch.FloatTensor(norm_params.output_max) - val_data['train_outputs']))
+
+    print(f"  MAE: {mae.item():.2f}\n")
+
+    # ======================================================================
+    # STEP 3a: Оптимизация через PYSCIPOPT
+    # ======================================================================
+    print("\n" + "="*70)
+    print("ТЕСТ 1: PYSCIPOPT + ПОЛИНОМ")
+    print("="*70 + "\n")
+
+    # Создаём модель pyscipopt с полиномиальными выражениями
+    model_scip = Model("Price_Polynomial_SCIP")
+    model_scip.redirectOutput()
+    model_scip.setParam('limits/time', 120)
+    model_scip.setParam('display/verblevel', 1)
+
+    # Decision variables
+    price_vars = []
+    for i in range(n_products):
+        min_p, max_p = problem_params.price_ranges[i]
+        var = model_scip.addVar(lb=min_p, ub=max_p, vtype='C', name=f"price_{i}")
+        price_vars.append(var)
+
+    context_bin_vars = []
+    for i in range(n_context_bin):
+        var = model_scip.addVar(vtype='B', name=f"context_bin_{i}")
+        context_bin_vars.append(var)
+
+    model_scip.addCons(quicksum(context_bin_vars) <= 1, name="max_one_promo")
+
+    context_cont = np.zeros(n_context_cont)
+    context_cont_vars = []
+    for i in range(n_context_cont):
+        var = model_scip.addVar(lb=context_cont[i], ub=context_cont[i], vtype='C', name=f"context_cont_{i}")
+        context_cont_vars.append(var)
+
+    # Normalized variables
+    input_norm_vars = []
+    all_input_vars = price_vars + context_cont_vars + context_bin_vars
+
+    for i, var in enumerate(all_input_vars):
+        mean = norm_params.input_means[i]
+        std = norm_params.input_stds[i]
+        norm_var = model_scip.addVar(vtype='C', name=f"input_norm_{i}")
+        model_scip.addCons(norm_var * std == var - mean, name=f"norm_{i}")
+        input_norm_vars.append(norm_var)
+
+    # Polynomial demand expressions
+    coeffs = demand_net.get_coefficients()
+
+    print("Построение полиномиальных выражений...")
+    demand_norm_vars = []
+    for i in range(n_products):
+        demand_norm_var = model_scip.addVar(lb=0, ub=1, vtype='C', name=f"demand_norm_{i}")
+
+        # Build polynomial expression
+        expr = coeffs['bias'][i]
+
+        # Linear terms
+        for j in range(len(input_norm_vars)):
+            expr += coeffs['linear'][i, j] * input_norm_vars[j]
+
+        # Quadratic terms (only for non-price variables)
+        for quad_idx, var_idx in enumerate(coeffs['quadratic_indices']):
+            expr += coeffs['quadratic'][i, quad_idx] * (input_norm_vars[var_idx] ** 2)
+
+        # Interaction terms
+        for pair_idx, (j, k) in enumerate(coeffs['pair_indices']):
+            expr += coeffs['interaction'][i, pair_idx] * input_norm_vars[j] * input_norm_vars[k]
+
+        model_scip.addCons(demand_norm_var == expr, name=f"demand_poly_{i}")
+        demand_norm_vars.append(demand_norm_var)
+
+    print(f"[OK] Построено {n_products} полиномиальных выражений\n")
+
+    # Demand denormalization
+    demand_vars = []
+    for i in range(n_products):
+        max_demand = norm_params.output_max[i]
+        var = model_scip.addVar(lb=0, ub=max_demand, vtype='C', name=f"demand_{i}")
+        model_scip.addCons(var == demand_norm_vars[i] * max_demand, name=f"denorm_{i}")
+        demand_vars.append(var)
+
+    # Objective and constraints
+    revenue_expr = quicksum(price_vars[i] * demand_vars[i] for i in range(n_products))
+    cost_expr = quicksum(problem_params.costs[i] * demand_vars[i] for i in range(n_products))
+    profit_expr = revenue_expr - cost_expr
+
+    min_profit_margin = 0.15
+    model_scip.addCons(profit_expr >= min_profit_margin * revenue_expr, name="min_profit_margin")
+
+    max_revenue = sum(problem_params.price_ranges[i][1] * norm_params.output_max[i]
+                     for i in range(n_products))
+    revenue_var = model_scip.addVar(lb=0, ub=max_revenue, vtype='C', name='total_revenue')
+    model_scip.addCons(revenue_var == revenue_expr, name='revenue_def')
+    model_scip.setObjective(revenue_var, sense='maximize')
+
+    print("Информация о модели (pyscipopt):")
+    print(f"  Переменных: {model_scip.getNVars()}")
+    print(f"  Ограничений: {model_scip.getNConss()}")
+    print()
+
+    print("Решение через pyscipopt...")
+    start_time = time.time()
+    status = model_scip.optimize()
+    scip_time = time.time() - start_time
+
+    scip_results = {
+        'status': model_scip.getStatus(),
+        'solve_time': scip_time,
+        'n_vars': model_scip.getNVars(),
+        'n_conss': model_scip.getNConss()
+    }
+
+    if model_scip.getStatus() in ['optimal', 'best solution found', 'feasible']:
+        scip_results['total_revenue'] = 0
+        scip_results['total_profit'] = 0
+        scip_results['optimal_prices'] = []
+        scip_results['demands'] = []
+
+        for i in range(n_products):
+            price = model_scip.getVal(price_vars[i])
+            demand = model_scip.getVal(demand_vars[i])
+            revenue = price * demand
+            profit = (price - problem_params.costs[i]) * demand
+
+            scip_results['optimal_prices'].append(price)
+            scip_results['demands'].append(demand)
+            scip_results['total_revenue'] += revenue
+            scip_results['total_profit'] += profit
+
+        scip_results['profit_margin'] = scip_results['total_profit'] / scip_results['total_revenue']
+
+        print("\nРЕЗУЛЬТАТЫ PYSCIPOPT:")
+        print(f"  Время решения: {scip_time:.2f} сек")
+        print(f"  Выручка: {scip_results['total_revenue']:.2f}")
+        print(f"  Прибыль: {scip_results['total_profit']:.2f}")
+        print(f"  Маржа: {scip_results['profit_margin'] * 100:.1f}%")
+        print(f"  Цены: {[f'{p:.2f}' for p in scip_results['optimal_prices']]}")
+    else:
+        print(f"\nPYSCIPOPT: решение не найдено, статус: {model_scip.getStatus()}")
+
+    # ======================================================================
+    # STEP 3b: Оптимизация через BONMIN
+    # ======================================================================
+    print("\n" + "="*70)
+    print("ТЕСТ 2: BONMIN/PYOMO + ПОЛИНОМ")
+    print("="*70 + "\n")
+
+    optimizer_bonmin = PriceOptimizerPolynomialPyomo(
+        demand_net=demand_net,
+        norm_params=norm_params,
+        problem_params=problem_params,
+        solver_name="bonmin",
+        solver_path=r"C:\distr\solvers\bonmin.exe",
+        min_profit_margin=0.15
+    )
+
+    start_time = time.time()
+    bonmin_results = optimizer_bonmin.optimize(time_limit=bonmin_time_limit)
+    bonmin_time = time.time() - start_time
+
+    bonmin_results['solve_time'] = bonmin_time
+
+    # ======================================================================
+    # STEP 3c: Оптимизация через COUENNE
+    # ======================================================================
+    print("\n" + "="*70)
+    print("ТЕСТ 3: COUENNE/PYOMO + ПОЛИНОМ")
+    print("="*70 + "\n")
+
+    optimizer_couenne = PriceOptimizerPolynomialPyomo(
+        demand_net=demand_net,
+        norm_params=norm_params,
+        problem_params=problem_params,
+        solver_name="couenne",
+        solver_path=r"C:\distr\solvers\couenne.exe",
+        min_profit_margin=0.15
+    )
+
+    start_time = time.time()
+    couenne_results = optimizer_couenne.optimize(time_limit=bonmin_time_limit)
+    couenne_time = time.time() - start_time
+
+    couenne_results['solve_time'] = couenne_time
+
+    # ======================================================================
+    # STEP 4: Сравнение результатов
+    # ======================================================================
+    print("\n" + "="*70)
+    print("СРАВНЕНИЕ РЕЗУЛЬТАТОВ")
+    print("="*70 + "\n")
+
+    print(f"{'Метрика':<30} {'PYSCIP':<12} {'BONMIN':<12} {'COUENNE':<12}")
+    print("-" * 66)
+
+    if scip_results['status'] in ['optimal', 'best solution found', 'feasible']:
+        print(f"{'Статус':<30} {scip_results['status']:<12} {bonmin_results['status']:<12} {couenne_results['status']:<12}")
+        print(f"{'Время (сек)':<30} {scip_results['solve_time']:<12.2f} {bonmin_results['solve_time']:<12.2f} {couenne_results['solve_time']:<12.2f}")
+        print(f"{'Переменных (PYSCIP)':<30} {scip_results['n_vars']:<12} {'N/A':<12} {'N/A':<12}")
+        print(f"{'Ограничений (PYSCIP)':<30} {scip_results['n_conss']:<12} {'N/A':<12} {'N/A':<12}")
+        print(f"{'Выручка':<30} {scip_results['total_revenue']:<12.2f} {bonmin_results['total_revenue']:<12.2f} {couenne_results['total_revenue']:<12.2f}")
+        print(f"{'Прибыль':<30} {scip_results['total_profit']:<12.2f} {bonmin_results['total_profit']:<12.2f} {couenne_results['total_profit']:<12.2f}")
+        print(f"{'Маржа (%)':<30} {scip_results['profit_margin']*100:<12.1f} {bonmin_results['profit_margin']*100:<12.1f} {couenne_results['profit_margin']*100:<12.1f}")
+
+        # Сравнение цен
+        print(f"\n{'Оптимальные цены':<30}")
+        for i in range(n_products):
+            pscip = scip_results['optimal_prices'][i]
+            bonmin = bonmin_results['optimal_prices'][i] if bonmin_results['optimal_prices'] else 0
+            couenne = couenne_results['optimal_prices'][i] if couenne_results['optimal_prices'] else 0
+            print(f"  Товар {i+1}: PYSCIP={pscip:.2f}, BONMIN={bonmin:.2f}, COU={couenne:.2f}")
+
+        # Вывод о производительности
+        print("\n" + "-" * 66)
+
+        # Лучший solver по скорости
+        times = [
+            ('PYSCIP', scip_results['solve_time']),
+            ('BONMIN', bonmin_results['solve_time']),
+            ('COUENNE', couenne_results['solve_time'])
+        ]
+        fastest = min(times, key=lambda x: x[1])
+        print(f"Самый быстрый: {fastest[0]} ({fastest[1]:.2f} сек)")
+
+        # Лучший solver по выручке
+        revenues = [
+            ('PYSCIP', scip_results['total_revenue']),
+            ('BONMIN', bonmin_results['total_revenue']),
+            ('COUENNE', couenne_results['total_revenue'])
+        ]
+        best_revenue = max(revenues, key=lambda x: x[1])
+        print(f"Лучшая выручка: {best_revenue[0]} ({best_revenue[1]:.2f})")
+    else:
+        print(f"PYSCIP не решил задачу")
+
+    print()
+
+    return scip_results, bonmin_results, couenne_results
 
 
 # =============================================================================
@@ -793,4 +1457,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == '--benchmark':
+        # Запуск бенчмарка сравнения pyscipopt vs bonmin
+        benchmark_polynomial_model()
+    else:
+        # Обычный запуск с нейросетью
+        main()
