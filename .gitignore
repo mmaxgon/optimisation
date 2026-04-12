@@ -1,7 +1,9 @@
 *.bat
 *.pdf
 *.txt
+!requirements.txt
 *.png
 .obsidian/
 .idea/
 .claude/
+.vscode/

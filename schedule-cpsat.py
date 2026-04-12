@@ -32,11 +32,8 @@ hall_names = list(halls.keys())
 movie_halls = {movie : [hall for hall in halls if movies[movie]["format"] in halls[hall]["supported_formats"]] for movie in movies}
 hall_movies = {hall : [movie for movie in movies if movies[movie]["format"] in halls[hall]["supported_formats"]] for hall in halls}
 
-sales = {
-	"movie_1": [1,2,3,4,5,6,7,8,9,8,7,6,5,4,3,2,1,1,1,1,1,1,1,1],
-	"movie_2": [1,1,1,1,1,2,3,4,5,6,7,8,9,8,7,6,6,5,4,3,3,1,1,1],
-	"movie_3": [9,9,9,8,7,6,5,4,3,2,1,1,1,1,1,1,2,3,4,5,6,7,6,5],
-}
+np.random.seed(1)
+sales = {m: [np.random.randint(low=1, high=10) for t in range(T)] for m in movies}
 
 ############################################################################
 # Модель
@@ -80,23 +77,24 @@ for ix_m, m in enumerate(movies):
 for ix_h, h in enumerate(halls):
  	for t in period:
 		 model.Add(sum(x[ix_h][ix_m][t] for ix_m in range(len(movies))) <= 1)
-# сеансы не пересекаются
-for ix_h, h in enumerate(halls):
-	for ix_m, m in enumerate(movies):
-		d = movies[m]["len"]
-		for tstart in range(T):
-			tend = tstart + np.min([T - tstart - 1, d])
-			#print(d, tstart, tend)
-			model.Add(NBIG * x[ix_h][ix_m][tstart] + sum(x[ix_h][ix_m1][t] for t in range(tstart, tend + 1) for ix_m1, m1 in enumerate(movies) if m1 != m) <= NBIG)
-			model.Add(NBIG * x[ix_h][ix_m][tstart] + sum(x[ix_h][ix_m][t] for t in range(tstart + 1, tend + 1)) <= NBIG)
-
-# # сеансы не пересекаются (ограничение через интервалы)
+# сеансы не пересекаются (ограничение через BIG_M)
 # for ix_h, h in enumerate(halls):
-#  	model.AddNoOverlap(shows[ix_h][ix_m][t] for ix_m, m in enumerate(movies) for t in period)
+# 	for ix_m, m in enumerate(movies):
+# 		d = movies[m]["len"]
+# 		for tstart in range(T):
+# 			tend = tstart + np.min([T - tstart - 1, d])
+# 			#print(d, tstart, tend)
+# 			model.Add(NBIG * x[ix_h][ix_m][tstart] + sum(x[ix_h][ix_m1][t] for t in range(tstart, tend + 1) for ix_m1, m1 in enumerate(movies) if m1 != m) <= NBIG)
+# 			model.Add(NBIG * x[ix_h][ix_m][tstart] + sum(x[ix_h][ix_m][t] for t in range(tstart + 1, tend + 1)) <= NBIG)
+
+# сеансы не пересекаются (ограничение через интервалы)
+for ix_h, h in enumerate(halls):
+ 	model.AddNoOverlap(shows[ix_h][ix_m][t] for ix_m, m in enumerate(movies) for t in period)
 ############################################################################
 # Objective
 ############################################################################
 model.Maximize(sum(sales[m][t] * x[ix_h][ix_m][t] for ix_h, h in enumerate(halls) for ix_m, m in enumerate(movies) for t in period))
+# model.Maximize(sum(1 * x[ix_h][ix_m][t] for ix_h, h in enumerate(halls) for ix_m, m in enumerate(movies) for t in period))
 
 ############################################################################
 # Solve
