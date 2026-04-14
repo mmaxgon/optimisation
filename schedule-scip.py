@@ -34,29 +34,38 @@ movie_names = list(movies.keys())
 
 @dataclass
 class Hall:
-	supported_formats: list     # поддерживаемые форматы
+	supported_formats: list[str]     # поддерживаемые форматы
 	max_shows: int                              # максимальное число сеансов
 	def __post_init__(self):
 		assert(type(self.supported_formats) is list)
 		assert(all([f in movie_formats for f in self.supported_formats]))
 
 halls = {
-	"hall_1": Hall(supported_formats=["A"], max_shows= 15),
+	"hall_1": Hall(supported_formats=["A"], max_shows=15),
 	"hall_2": Hall(supported_formats=["A"], max_shows=12),
 	"hall_3": Hall(supported_formats=["A", "B"], max_shows=10),
 }
 hall_names = list(halls.keys())
 
-# допустимые комбинации залов и фильмов
 movie_halls = {movie : [hall for hall in halls if movies[movie].format in halls[hall].supported_formats] for movie in movies}
 hall_movies = {hall : [movie for movie in movies if movies[movie].format in halls[hall].supported_formats] for hall in halls}
 
-# спрос на фильм в зависимости от времени начала показа
-sales = {
-	"movie_1": [1,2,3,4,5,6,7,8,9,8,7,6,5,4,3,2,1,1,1,1,1,1,1,1],
-	"movie_2": [1,1,1,1,1,2,3,4,5,6,7,8,9,8,7,6,6,5,4,3,3,1,1,1],
-	"movie_3": [9,9,9,8,7,6,5,4,3,2,1,1,1,1,1,1,2,3,4,5,6,7,6,5],
-}
+# Максимальное число сеансов в зале
+hall_max_shows = {}
+for h in halls.keys():
+	hall_max_shows[h] = min(
+		halls[h].max_shows, 
+		T // min(movies[m].len for m in movies.keys() if h in movie_halls[m])
+	)
+
+# Максимальное число сеансов фильма в зале
+hall_movie_max_shows = {}
+for h in halls.keys():
+	for m in movies.keys():
+		hall_movie_max_shows[h, m] = 0 if h not in movie_halls[m] else min(movies[m].max, hall_max_shows[h])
+
+np.random.seed(1)
+sales = {m: [np.random.randint(low=1, high=10) for t in range(T)] for m in movies}
 
 ############################################################################
 # Модель
@@ -65,70 +74,80 @@ sales = {
 model = scip.Model("SCIP Schedule")
 
 ############################################################################
-# Decision vars
+# Decision vars + Constraints
 ############################################################################
 
 # vtype: type of the variable: 'C' continuous, 'I' integer, 'B' binary, and 'M' implicit integer
-model_x = [[[model.addVar(name=f"x[{h},{m},{t}]", vtype="B") for t in period] for m in movie_names] for h in hall_names]
+# Число сеансов данного фильма во всех залах
+movie_count = {
+	m: model.addVar(
+		name=f"{m}_count", 
+		lb=movies[m].min, 
+		ub=movies[m].max,
+		vtype="I"
+	) for m in movies.keys()
+}
 
-############################################################################
-# Constraints
-############################################################################
+# Число сеансов всех фильмов в данном зале
+hall_count = {
+	h: model.addVar(
+		name=f"{h}_count", 
+		lb=0, 
+		ub=hall_max_shows[h],
+		vtype="I"
+	) for h in halls.keys()
+}
 
-# Максиммальное и минимальное число фильмов
-constr_show_ranges = []
-for (ixm, m) in enumerate(movie_names):
-	constr_show_ranges.append(
-		model.addCons(sum(model_x[ixh][ixm][t] for (ixh, h) in enumerate(hall_names) for t in period) >= movies[m].min)
-	)
-	constr_show_ranges.append(
-		model.addCons(sum(model_x[ixh][ixm][t] for (ixh, h) in enumerate(hall_names) for t in period) <= movies[m].max)
-	)
+# Число сеансов данного фильма в данном зале
+movie_hall_count = {
+	(h, m): model.addVar(
+		name=f"{h}_{m}_count", 
+		lb=0, 
+		ub=hall_movie_max_shows[h, m], # Фильмы только в поддерживаемых его формат залах
+		vtype="I"
+	) for m in movies.keys() for h in halls.keys()
+}
 
+# Согласовываем количество сеансов фильмов в залах
+for m in movies.keys():
+	model.addCons(sum(movie_hall_count[h, m] for h in halls.keys()) == movie_count[m])
+for h in halls.keys():
+	model.addCons(sum(movie_hall_count[h, m] for m in movies.keys()) == hall_count[h])
 
-# Фильмы только в поддерживаемых формат заллах
-constr_movie_hall_formats = []
-for (ixm, m) in enumerate(movie_names):
+# Фильмы только в поддерживаемых его формат залах
+for m in movies:
 	allowed_h = movie_halls[m]
-	for (ixh, h) in enumerate(hall_names):
+	for h in halls:
 		if not (h in allowed_h):
-			constr_movie_hall_formats.append(model.addCons(sum(model_x[ixh][ixm][t] for t in period) == 0))
-			
-"""
-Непересечение сеансов можно задать через линейные логические неравенства с использованием NBIG,
-а можно через клики
-"""		
-# в каждом зале в каждый момент времени начинается не больше одного сеанса
-constr_shows_not_intersect = []
-for (ixh, h) in enumerate(hall_names):
-	for t in period:
-		constr_shows_not_intersect.append(model.addCons(sum(model_x[ixh][ixm][t] for (ixm, m) in enumerate(movie_names)) <= 1))
+			model.addCons(movie_hall_count[h, m] == 0)
 
-# сеансы не пересекаются
-for (ixh, h) in enumerate(hall_names):
-	for (ixm, m) in enumerate(movie_names):
+# Начинается ли сеанс данного фильма в данном зале в определенный момент времени
+x = {(h, m, t): model.addVar(name=f"x[{h}, {m}, {t}]", vtype="B") for h in halls.keys() for m in movies.keys() for t in period}
+
+# Согласовываем назначение сеансов с числом сеансов каждого фильма в каждом зале
+for h in halls.keys():
+	for m in movies.keys():
+		model.addCons(sum(x[h, m, t] for t in period) == movie_hall_count[h, m])
+
+# в каждом зале в каждый момент времени начинается не больше одного сеанса
+for h in halls.keys():
+	for t in period:
+		model.addCons(sum(x[h, m, t] for m in movies.keys()) <= 1)
+
+# сеансы не пересекаются (ограничение через BIG_M)
+for h in halls.keys():
+	for m in movies.keys():
 		d = movies[m].len
-		# Число фильмов в зале за промежуток времени d не должно превышать d / минимальная длительность фильма
-		big_m = int(np.ceil(d / min([movies[mov].len for mov in movies.keys()])))
-		big_m = NBIG
 		for tstart in range(T):
-			tend = min(tstart + d, T - 1)
-			# print(d, tstart, tend)
-			# BIG M
-			constr_shows_not_intersect.append(
-				model.addCons(
-					big_m * model_x[ixh][ixm][tstart] + sum(model_x[ixh][ixm1][t]
-					for t in range(tstart + 1, tend + 1) for (ixm1, m1) in enumerate(movie_names)) <= big_m)
-			)
-			# Cliques
-			# for t in range(tstart + 1, tend + 1):
-			# 	constr_shows_not_intersect.add(model.addCons(model_x[ixh][ixm][tstart] + sum(model_x[ixh][ixm1][t] for (ixm1, m1) in enumerate(movie_names)) <= 1))
+			tend = tstart + np.min([T - tstart - 1, d])
+			#print(d, tstart, tend)
+			model.addCons(d * x[h, m, tstart] + sum(x[h, m1, t] for t in range(tstart + 1, tend + 1) for m1 in movies.keys()) <= d)
 
 ############################################################################
 # Objective
 ############################################################################
 
-model.setObjective(sum(sales[m][t] * model_x[ixh][ixm][t] for (ixh, h) in enumerate(hall_names) for (ixm, m) in enumerate(movie_names) for t in period), sense='maximize')
+model.setObjective(sum(sales[m][t] * x[h, m, t] for h in halls.keys() for m in movies.keys() for t in period), sense='maximize')
 
 model.writeProblem(filename="scip_problem_init.lp", trans=False, genericnames=False)
 ############################################################################
@@ -145,30 +164,30 @@ sol_x = [[[0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
   [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]]]
 
 # sol_1 = model.createPartialSol()
-sol_1 = model.createSol()
-for (ixh, h) in enumerate(hall_names):
-	for t in period:
-		for (ixm, m) in enumerate(movie_names):
-			model.setSolVal(sol_1, model_x[ixh][ixm][t], int(sol_x[ixh][ixm][t]))
+# sol_1 = model.createSol()
+# for (ixh, h) in enumerate(hall_names):
+# 	for t in period:
+# 		for (ixm, m) in enumerate(movie_names):
+# 			model.setSolVal(sol_1, x[h, m, t], int(sol_x[ixh][ixm][t]))
 
-# Проверяем и добавляем решение
-accepted = model.addSol(sol_1, free=False)
-if accepted:
-	print(f"Warm start solution was accepted: {accepted}")
-	print(model.getSolObjVal(sol_1))
-else:
-	print(f"Warm start solution was not accepted: {accepted}")
+# # Проверяем и добавляем решение
+# accepted = model.addSol(sol_1, free=False)
+# if accepted:
+# 	print(f"Warm start solution was accepted: {accepted}")
+# 	print(model.getSolObjVal(sol_1))
+# else:
+# 	print(f"Warm start solution was not accepted: {accepted}")
 
 # model.getParam("constraints/setppc/cliquelifting")
 # model.getParam("display/verblevel")
-# model.setParam("display/verblevel", 5)
+model.setParam("display/verblevel", 1)
 model.setParam('limits/time', 600)
 # model.setParam('constraints/setppc/cliquelifting', True)
-model.setPresolve(scip.SCIP_PARAMSETTING.OFF)
-model.setParam("limits/gap", 10)
+# model.setPresolve(scip.SCIP_PARAMSETTING.OFF)
+# model.setParam("limits/gap", 10)
 
 # model.hideOutput()
-model.setLogfile("scip_log.txt")
+# model.setLogfile("scip_log.txt")
 start_time = time()
 model.optimize()
 sol = model.getBestSol()
@@ -186,13 +205,11 @@ if status in ("optimal", "gaplimit"):
 	for (ixh, h) in enumerate(hall_names):
 		for t in period:
 			for (ixm, m) in enumerate(movie_names):
-				if sol[model_x[ixh][ixm][t]] > 0:
-					print("hall: {0}, start: {1}, movie: {2}, duration: {3}".format(h, t, m, movies[m].len))
+				if sol[x[h, m, t]] > 0:
+					print(f"hall: {h}, start: {t}, movie: {m}, duration: {movies[m].len}")
 else:
 	print('No solution found.')
 
 print(model.getSolObjVal(sol))
 print(end_time - start_time)
-
-# sol_x = [[[int(model.getVal(model_x[ixh][ixm][t])) for t in period] for (ixm, m) in enumerate(movie_names)] for (ixh, h) in enumerate(hall_names)]
 
