@@ -143,21 +143,19 @@ for h in halls.keys():
  	model.add_no_overlap(shows[h, m, t] for m in movies.keys() for t in period)
 
 # сеансы не пересекаются (ограничение через BIG_M)
-# NBIG = 100
 # for h in halls.keys():
 # 	for m in movies.keys():
 # 		d = movies[m].len
 # 		for tstart in range(T):
 # 			tend = tstart + np.min([T - tstart - 1, d])
 # 			#print(d, tstart, tend)
-# 			model.add(NBIG * x[h, m, tstart] + sum(x[h, m1, t] for t in range(tstart, tend + 1) for m1 in movies.keys() if m1 != m) <= NBIG)
-# 			model.add(NBIG * x[h, m, tstart] + sum(x[h, m, t] for t in range(tstart + 1, tend + 1)) <= NBIG)
+# 			model.add(d * x[h, m, tstart] + sum(x[h, m1, t] for t in range(tstart + 1, tend + 1) for m1 in movies.keys()) <= d)
 
 ############################################################################
 # Objective
 ############################################################################
 
-model.Maximize(sum(sales[m][t] * x[h, m, t] for h in halls.keys() for m in movies.keys() for t in period))
+model.maximize(sum(sales[m][t] * x[h, m, t] for h in halls.keys() for m in movies.keys() for t in period))
 
 ############################################################################
 # Solve

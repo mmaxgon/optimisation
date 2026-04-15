@@ -88,7 +88,7 @@ for m in movies:
 			model.add(movie_hall_count[h, m] == 0)
 
 # Показывается ли фильм m в зале h i-ым сеансом?
-x = {(h, m, i): model.NewBoolVar("x[{}, {}, {}]".format(h, m, i)) for i in range(hall_max_shows[h]) for m in movies for h in halls}
+x = {(h, m, i): model.new_bool_var("x[{}, {}, {}]".format(h, m, i)) for i in range(hall_max_shows[h]) for m in movies for h in halls}
 
 # В каждом зале на каждом сеансе показывают не более одного фильма
 for h in halls:
@@ -107,7 +107,7 @@ for h in halls:
 
 # Время начала i-ого сеанса каждого фильма в каждом зале
 start_movie_hall = {
-	(h, m, i): model.NewIntVar(name=f"начало сеанса {i} в зале {h} фильма {m}", lb=0, ub=T-1) 
+	(h, m, i): model.new_int_var(name=f"начало сеанса {i} в зале {h} фильма {m}", lb=0, ub=T-1) 
 	for i in range(hall_max_shows[h]) 
 	for m in movies 
 	for h in halls
@@ -115,7 +115,7 @@ start_movie_hall = {
 
 # Время окончания i-ого сеанса каждого фильма в каждом зале
 end_movie_hall = {
-	(h, m, i): model.NewIntVar(name=f"конец сеанса {i} в зале {h} фильма {m}", lb=0, ub=T-1+max(movies[m]["len"] for m in movies if h in movie_halls[m]))
+	(h, m, i): model.new_int_var(name=f"конец сеанса {i} в зале {h} фильма {m}", lb=0, ub=T-1+max(movies[m]["len"] for m in movies if h in movie_halls[m]))
 	for i in range(hall_max_shows[h]) 
 	for m in movies 
 	for h in halls
@@ -155,7 +155,7 @@ for h in halls:
 
 # Коэффициенты при целевой функции, индексированные номером сеанса, а не временным индексом
 sales_x = {
-	(h, m, i): model.NewIntVar(name=f"sales_x[{h}, {m}, {i}]", lb=0, ub=10)
+	(h, m, i): model.new_int_var(name=f"sales_x[{h}, {m}, {i}]", lb=0, ub=10)
 	for i in range(hall_max_shows[h])
 	for m in movies
 	for h in halls
@@ -171,14 +171,14 @@ for h in halls:
 				index=start_movie_hall[h, m, i], 
 				expressions=sales[m], 
 				target=sales_x[h, m, i]
-			).OnlyEnforceIf(x[h, m, i])
+			).only_enforce_if(x[h, m, i])
 			model.add(sales_x[h, m, i] == 0).OnlyEnforceIf(x[h, m, i].Not())
 
 ############################################################################
 # Objective
 ############################################################################
-model.Maximize(sum(sales_x[h, m, i] for h in halls for m in movies for i in range(hall_max_shows[h])))
-# model.Maximize(
+model.maximize(sum(sales_x[h, m, i] for h in halls for m in movies for i in range(hall_max_shows[h])))
+# model.maximize(
 # 	sum(1 * x[h, m, i] 
 # 		for i in range(hall_max_shows[h])
 # 		for m in movies

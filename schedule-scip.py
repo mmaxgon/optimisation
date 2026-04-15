@@ -9,7 +9,6 @@ import sys; print('Python %s on %s' % (sys.version, sys.platform))
 # Data
 ############################################################################
 
-NBIG = 100
 T = 24
 period = range(T)
 
