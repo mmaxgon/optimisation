@@ -165,7 +165,7 @@ def get_schedule(halls_show_count, movie_hall_seq):
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 60.0
     start_time = time()
-    status = solver.Solve(model)
+    status = solver.solve(model)
     end_time = time()
 
     res = {}
