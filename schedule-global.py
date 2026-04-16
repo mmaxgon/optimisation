@@ -1,4 +1,5 @@
 from time import time
+import random
 from ortools.sat.python import cp_model
 import pyscipopt as scip
 from schedule_data import *
@@ -84,39 +85,52 @@ def get_movie_hall_count(movie_hall_count_rand):
 def get_movie_hall_seq(movie_hall_count):
     halls_show_count = {h: sum(movie_hall_count[h, m] for m in movies) for h in halls}
 
-    model = scip.Model("Последовательность фильмов в зале")
-
-    # Идёт ли в зале h фильм m i-ым сеансом?
-    x = {(h, m, i): model.addVar(name=f"x[{h}, {m}, {i}]", vtype="B") for h in halls for m in movies for i in range(halls_show_count[h])}
-
-    # В каждом зале на каждом сеансе показывают ровно один фильм
-    for h in halls:
-        for i in range(halls_show_count[h]):
-            model.addCons(sum(x[h, m, i] for m in movies) == 1)
-
-    # Соблюдаем число сеансов каждого фильма в каждом зале
-    for h in halls:
-        for m in movies:
-            model.addCons(sum(x[h, m, i] for i in range(halls_show_count[h])) == movie_hall_count[h, m])
-
-    model.setParam("display/verblevel", 1)
-    model.setParam('limits/time', 10)
-
     start_time = time()
-    model.optimize()
-    sol = model.getBestSol()
-    end_time = time()
-    status = model.getStatus()
-
     res = {}
-    if status in ("optimal", "gaplimit"):
-        for h in halls:
-            for i in range(halls_show_count[h]):
-                for m in movies:
-                    if sol[x[h, m, i]]:
-                        res[(h, i)] = m
-    else:
-        res = None
+    for h in halls:
+        elements = {m: movie_hall_count[h, m] for m in movies if movie_hall_count[h, m] > 0}
+        items = []
+        for item, count in elements.items():
+            items.extend([item] * count)
+        # Перемешиваем
+        random.shuffle(items)
+        for i in range(halls_show_count[h]):
+            res[h, i] = items[i]
+    end_time = time()
+
+    # model = scip.Model("Последовательность фильмов в зале")
+
+    # # Идёт ли в зале h фильм m i-ым сеансом?
+    # x = {(h, m, i): model.addVar(name=f"x[{h}, {m}, {i}]", vtype="B") for h in halls for m in movies for i in range(halls_show_count[h])}
+
+    # # В каждом зале на каждом сеансе показывают ровно один фильм
+    # for h in halls:
+    #     for i in range(halls_show_count[h]):
+    #         model.addCons(sum(x[h, m, i] for m in movies) == 1)
+
+    # # Соблюдаем число сеансов каждого фильма в каждом зале
+    # for h in halls:
+    #     for m in movies:
+    #         model.addCons(sum(x[h, m, i] for i in range(halls_show_count[h])) == movie_hall_count[h, m])
+
+    # model.setParam("display/verblevel", 1)
+    # model.setParam('limits/time', 10)
+
+    # start_time = time()
+    # model.optimize()
+    # sol = model.getBestSol()
+    # end_time = time()
+    # status = model.getStatus()
+
+    # res = {}
+    # if status in ("optimal", "gaplimit"):
+    #     for h in halls:
+    #         for i in range(halls_show_count[h]):
+    #             for m in movies:
+    #                 if sol[x[h, m, i]]:
+    #                     res[(h, i)] = m
+    # else:
+    #     res = None
 	
     return (halls_show_count, res, end_time-start_time)
 
@@ -169,6 +183,13 @@ def get_schedule(halls_show_count, movie_hall_seq):
     return (res, end_time-start_time)
 
 #########################################################################
+# Функция цели
+#########################################################################
+def get_goal(schedule):
+    return sum(sales[schedule[ix]["movie"]][schedule[ix]["start"]] for ix in schedule.keys())
+
+
+#########################################################################
 
 movie_hall_count_rand = {(h, m): 0 if hall_movie_max_shows[h, m] == 0 else np.random.randint(low=0, high=hall_movie_max_shows[h, m]) for m in movies for h in halls}
 (movie_hall_count, duration) = get_movie_hall_count(movie_hall_count_rand)
@@ -178,5 +199,5 @@ print(f"{movie_hall_count} \n {duration}")
 print(f"{movie_hall_seq} \n {duration}")
 
 (schedule, duration) = get_schedule(halls_show_count, movie_hall_seq)
-print(f"{schedule} \n {duration}")
+print(f"{schedule} \n {duration}, \n {get_goal(schedule)}")
 
