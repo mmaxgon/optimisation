@@ -88,7 +88,7 @@ for m in movies:
 			model.add(movie_hall_count[h, m] == 0)
 
 # Показывается ли фильм m в зале h i-ым сеансом?
-x = {(h, m, i): model.new_bool_var("x[{}, {}, {}]".format(h, m, i)) for i in range(hall_max_shows[h]) for m in movies for h in halls}
+x = {(h, m, i): model.new_bool_var(f"x[{h}, {m}, {i}]") for i in range(hall_max_shows[h]) for m in movies for h in halls}
 
 # В каждом зале на каждом сеансе показывают не более одного фильма
 for h in halls:
@@ -125,14 +125,14 @@ end_movie_hall = {
 for h in halls:
 	for m in movies:
 		for i in range(hall_max_shows[h]):
-			model.add(end_movie_hall[h, m, i] == start_movie_hall[h, m, i] + movies[m]["len"] + 1).OnlyEnforceIf(x[h, m, i])
+			model.add(end_movie_hall[h, m, i] == start_movie_hall[h, m, i] + movies[m]["len"] + 1).only_enforce_if(x[h, m, i])
 
 # У сеансов строго возрастающее время начала
 for h in halls:
 	for i in range(1, hall_max_shows[h]):
 		for m1 in movies:
 			for m2 in movies:
-				model.add(start_movie_hall[h, m1, i] >= start_movie_hall[h, m2, i-1]).OnlyEnforceIf(x[h, m1, i]) #.OnlyEnforceIf(x[h, m2, i-1])
+				model.add(start_movie_hall[h, m1, i] >= start_movie_hall[h, m2, i-1]).only_enforce_if(x[h, m1, i]).only_enforce_if(x[h, m2, i-1])
 
 # Интервалы сеансов в каждом зале
 shows = {
