@@ -54,7 +54,7 @@ def get_movie_hall_count(movie_hall_count_rand):
         # Ограничение на длительность всех сеансов в зале h
         model.addCons(sum((movies[m].len + 1) * movie_hall_count[h, m] for m in movies) <= T + min(movies[m].len for m in hall_movies[h]))
 
-    # Минимизируем отклонения числа сеансов с "догадкой"
+    # Минимизируем отклонения числа сеансов с "догадкой" по l1 норме
     mu = {(h, m): model.addVar(name=f"mu[{h}, {m}]", vtype="C") for m in movies for h in halls}
     for h in halls:
         for m in movies:
@@ -200,4 +200,3 @@ print(f"{movie_hall_seq} \n {duration}")
 
 (schedule, duration) = get_schedule(halls_show_count, movie_hall_seq)
 print(f"{schedule} \n {duration}, \n {get_goal(schedule)}")
-
