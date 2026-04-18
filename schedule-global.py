@@ -1,202 +1,250 @@
 from time import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import os
 import random
+import numpy as np
 from ortools.sat.python import cp_model
-import pyscipopt as scip
 from schedule_data import *
+from schedule_workers import sample_initial, search_neighborhood
+
+"""
+Глобальная оптимизация.
+Разделена на 3 этапа принятия решений.
+Результаты каждого этапа верхнего уровня служат ограничениями для следующего.
+Идея:
+1. Создаётся множество допустимых решения со случаным распределением сеансов фильмов по залам.
+2. Из множества допустимых решений выбирается 50% лучших. Остальные 50% создаются "в окрестности" лучших.
+Окрестность решения получается расчётом векторов, описывающих решения и служащих параметрами для нахождения решений на каждом уровне.
+Т.е. решение -> вектор параметров шага 1, вектор параметров шага 2, вектор параметров шага 3.
+Каждый вектор слегка зашумляется и подаётся на вход в решатель каждого уровня для поиска близких решений.
+Идея: 50% новых решений ищутся в окрестности 50% лучших.
+"""
+
+# Параметры алгоритма
+N = 20                    # размер популяции
+alpha = 0.9               # коэффициент сжатия окрестности поиска
+max_iter = 30             # максимальное число итераций
+stagnation_limit = 10      # останов при стагнации (итераций без улучшения)
+SEED = 42
+
+N_keep = N // 2  # число лучших точек, сохраняемых на каждой итерации
+sigma_y = 3.0  # масштаб шума для предпочтительных времён начала (итерации)
+
 
 #############################################################
-# Решение 1: сколько сеансов каждого фильма идёт в каждом зале
+# Тёплый старт: уточнение через полную модель CP-SAT
 #############################################################
 
-def get_movie_hall_count(movie_hall_count_rand):
+def refine_with_cpsat(schedule, time_limit=600):
     """
-    Cколько сеансов каждого фильма идёт в каждом зале
+    Полная модель CP-SAT (как в schedule-cpsat.py) с hint solution
+    из расписания, найденного метаэвристикой.
     """
-    model = scip.Model("Cколько сеансов каждого фильма идёт в каждом зале")
-
-    # Число сеансов данного фильма во всех залах
-    movie_count = {
-        m: model.addVar(
-            name=f"{m}_count", 
-            lb=movies[m].min, 
-            ub=movies[m].max,
-            vtype="I"
-        ) for m in movies
-    }
-
-    # Число сеансов всех фильмов в данном зале
-    hall_count = {
-        h: model.addVar(
-            name=f"{h}_count", 
-            lb=0, 
-            ub=hall_max_shows[h],
-            vtype="I"
-        ) for h in halls
-    }
-
-    # Число сеансов данного фильма в данном зале
-    movie_hall_count = {
-        (h, m): model.addVar(
-            name=f"{h}_{m}_count", 
-            lb=0, 
-            ub=hall_movie_max_shows[h, m], 
-            vtype="I"
-        ) for m in movies for h in halls
-    }
-
-    # Согласовываем количество сеансов фильмов в залах
-    for m in movies:
-        # Число сеансов фильма m во всех залах
-        model.addCons(sum(movie_hall_count[h, m] for h in halls) == movie_count[m])
-    for h in halls:
-        # Число сеансов всех фильмов в зале h
-        model.addCons(sum(movie_hall_count[h, m] for m in movies) == hall_count[h])
-        # Ограничение на длительность всех сеансов в зале h
-        model.addCons(sum((movies[m].len + 1) * movie_hall_count[h, m] for m in movies) <= T + min(movies[m].len for m in hall_movies[h]))
-
-    # Минимизируем отклонения числа сеансов с "догадкой" по l1 норме
-    mu = {(h, m): model.addVar(name=f"mu[{h}, {m}]", vtype="C") for m in movies for h in halls}
-    for h in halls:
-        for m in movies:
-            model.addCons(movie_hall_count[h, m] - movie_hall_count_rand[h, m] <= mu[h, m])
-            model.addCons(movie_hall_count_rand[h, m] - movie_hall_count[h, m] <= mu[h, m])
-    model.setObjective(sum(mu[h, m ] for h in halls for m in movies), sense='minimize')
-
-    model.setParam("display/verblevel", 1)
-    model.setParam('limits/time', 10)
-
-    start_time = time()
-    model.optimize()
-    sol = model.getBestSol()
-    end_time = time()
-    status = model.getStatus()
-
-    if status in ("optimal", "gaplimit"):
-        movie_hall_count_res = {(h, m): int(round(sol[movie_hall_count[h, m]])) for h in halls for m in movies}
-    else:
-        movie_hall_count_res = None
-        
-    return (movie_hall_count_res, end_time-start_time)
-
-#############################################################
-# Решение 2: Последовательность фильмов в зале
-#############################################################
-
-def get_movie_hall_seq(movie_hall_count):
-    halls_show_count = {h: sum(movie_hall_count[h, m] for m in movies) for h in halls}
-
-    start_time = time()
-    res = {}
-    for h in halls:
-        elements = {m: movie_hall_count[h, m] for m in movies if movie_hall_count[h, m] > 0}
-        items = []
-        for item, count in elements.items():
-            items.extend([item] * count)
-        # Перемешиваем
-        random.shuffle(items)
-        for i in range(halls_show_count[h]):
-            res[h, i] = items[i]
-    end_time = time()
-
-    # model = scip.Model("Последовательность фильмов в зале")
-
-    # # Идёт ли в зале h фильм m i-ым сеансом?
-    # x = {(h, m, i): model.addVar(name=f"x[{h}, {m}, {i}]", vtype="B") for h in halls for m in movies for i in range(halls_show_count[h])}
-
-    # # В каждом зале на каждом сеансе показывают ровно один фильм
-    # for h in halls:
-    #     for i in range(halls_show_count[h]):
-    #         model.addCons(sum(x[h, m, i] for m in movies) == 1)
-
-    # # Соблюдаем число сеансов каждого фильма в каждом зале
-    # for h in halls:
-    #     for m in movies:
-    #         model.addCons(sum(x[h, m, i] for i in range(halls_show_count[h])) == movie_hall_count[h, m])
-
-    # model.setParam("display/verblevel", 1)
-    # model.setParam('limits/time', 10)
-
-    # start_time = time()
-    # model.optimize()
-    # sol = model.getBestSol()
-    # end_time = time()
-    # status = model.getStatus()
-
-    # res = {}
-    # if status in ("optimal", "gaplimit"):
-    #     for h in halls:
-    #         for i in range(halls_show_count[h]):
-    #             for m in movies:
-    #                 if sol[x[h, m, i]]:
-    #                     res[(h, i)] = m
-    # else:
-    #     res = None
-	
-    return (halls_show_count, res, end_time-start_time)
-
-#############################################################
-# Решение 3: Время сеансов
-#############################################################
-
-def get_schedule(halls_show_count, movie_hall_seq):
     model = cp_model.CpModel()
 
-    # Время начала i-ого сеанса каждого фильма в каждом зале
-    start_movie_hall = {
-        (h, i): model.new_int_var(name=f"Начало сеанса {i} в зале {h} фильма {movie_hall_seq[h, i]}", lb=0, ub=T-1) 
-        for (h, i) in movie_hall_seq.keys() 
+    # --- Переменные ---
+    movie_count_var = {
+        m: model.new_int_var(name=f"{m}_count", lb=movies[m].min, ub=movies[m].max)
+        for m in movies
+    }
+    hall_count_var = {
+        h: model.new_int_var(name=f"{h}_count", lb=0, ub=hall_max_shows[h])
+        for h in halls
+    }
+    movie_hall_count_var = {
+        (h, m): model.new_int_var(name=f"{h}_{m}_count", lb=0, ub=hall_movie_max_shows[h, m])
+        for m in movies for h in halls
     }
 
-    # Время окончания i-ого сеанса каждого фильма в каждом зале
-    end_movie_hall = {
-        (h, i): model.new_int_var(name=f"Конец сеанса {i} в зале {h} фильма {movie_hall_seq[h, i]}", lb=0, ub=T-1+max(movies[m].len for m in hall_movies[h]))
-        for (h, i) in movie_hall_seq.keys() 
-    }
-
-    # Согласовываем начало и конец сеансов
-    for (h, i) in movie_hall_seq.keys():
-        model.add(end_movie_hall[h, i] == start_movie_hall[h, i] + movies[movie_hall_seq[h, i]].len)
-                
-    # У сеансов строго возрастающее время начала
+    for m in movies:
+        model.add(sum(movie_hall_count_var[h, m] for h in halls) == movie_count_var[m])
     for h in halls:
-        for i in range(1, halls_show_count[h]):
-            model.add(start_movie_hall[h, i] >= end_movie_hall[h, i-1] + 1)
+        model.add(sum(movie_hall_count_var[h, m] for m in movies) == hall_count_var[h])
 
+    x = {
+        (h, m, t): model.new_bool_var(name=f"x[{h}, {m}, {t}]")
+        for h in halls for m in hall_movies[h] for t in valid_starts[m]
+    }
+    shows = {
+        (h, m, t): model.new_optional_interval_var(
+            start=t, size=movies[m].len + 1, end=t + movies[m].len + 1,
+            is_present=x[h, m, t], name=f"show[{h}, {m}, {t}]"
+        ) for (h, m, t) in x.keys()
+    }
+
+    for h in halls:
+        for m in movies:
+            if h in movie_halls[m]:
+                model.add(sum(x[h, m, t] for t in valid_starts[m]) == movie_hall_count_var[h, m])
+            else:
+                model.add(movie_hall_count_var[h, m] == 0)
+
+    for h in halls:
+        for t in period:
+            starts_at_t = [x[h, m, t] for m in hall_movies[h] if (h, m, t) in x]
+            if starts_at_t:
+                model.add(sum(starts_at_t) <= 1)
+
+    for h in halls:
+        hall_shows = [shows[h, m, t] for m in hall_movies[h] for t in valid_starts[m]]
+        model.add_no_overlap(hall_shows)
+
+    model.maximize(sum(sales[m][t] * x[h, m, t] for (h, m, t) in x.keys()))
+
+    # --- Тёплый старт: hint из расписания метаэвристики ---
+    active_shows = set()
+    for (h, i), info in schedule.items():
+        active_shows.add((h, info["movie"], info["start"]))
+
+    for (h, m, t) in x.keys():
+        model.add_hint(x[h, m, t], 1 if (h, m, t) in active_shows else 0)
+
+    hint_mhc = {(h, m): 0 for h in halls for m in movies}
+    for (h, i), info in schedule.items():
+        hint_mhc[h, info["movie"]] += 1
+    for m in movies:
+        model.add_hint(movie_count_var[m], sum(hint_mhc[h, m] for h in halls))
+    for h in halls:
+        model.add_hint(hall_count_var[h], sum(hint_mhc[h, m] for m in movies))
+    for h in halls:
+        for m in movies:
+            model.add_hint(movie_hall_count_var[h, m], hint_mhc[h, m])
+
+    # --- Решение ---
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 60.0
-    start_time = time()
+    solver.parameters.max_time_in_seconds = time_limit
+    start = time()
     status = solver.solve(model)
-    end_time = time()
+    dt = time() - start
 
-    res = {}
-    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        for h in halls:
-            for i in range(halls_show_count[h]):
-                res[(h, i)] = {
-                    "movie": movie_hall_seq[h, i], 
-                    "start": solver.value(start_movie_hall[h, i]), 
-                    "end": solver.value(end_movie_hall[h, i])
-                }
+    return solver, status, x, dt
+
+
+def main():
+    np.random.seed(SEED)
+    random.seed(SEED)
+
+    n_workers = min(os.cpu_count() or 1, N)
+
+    # --- Шаги 2-6: начальное исследование (параллельно) ---
+    print("=" * 60)
+    print(f"Алгоритм: N={N}, alpha={alpha}, max_iter={max_iter}, workers={n_workers}")
+    print("=" * 60)
+
+    t_total = time()
+
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        # Начальная выборка: батчи по n_workers*3 задач
+        population = []
+        max_attempts = N * 5
+        batch_size = n_workers * 3
+        submitted = 0
+        while len(population) < N and submitted < max_attempts:
+            n_submit = min(batch_size, max_attempts - submitted)
+            futures = [executor.submit(sample_initial) for _ in range(n_submit)]
+            submitted += n_submit
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except Exception:
+                    continue
+                if result is not None:
+                    population.append(result)
+                if len(population) >= N:
+                    break
+
+        population.sort(key=lambda r: r[2], reverse=True)  # maximize
+        n_keep = min(N_keep, len(population))
+        best = list(population[:n_keep])
+        history = list(population)
+
+        print(f"Начальная выборка: {len(population)} допустимых точек")
+        print(f"Лучшее f = {best[0][2]}")
+
+        # --- Шаги 7-11: итерации (параллельный поиск в окрестности) ---
+        prev_best_f = best[0][2]
+        stagnation_count = 0
+
+        for k in range(1, max_iter + 1):
+            futures = [executor.submit(search_neighborhood, best[j], k, alpha, sigma_y)
+                       for j in range(n_keep)]
+            new_points = []
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                except Exception:
+                    continue
+                if result is not None:
+                    new_points.append(result)
+
+            # Шаг 6: объединяем, отбираем n_keep лучших
+            combined = best + new_points
+            combined.sort(key=lambda r: r[2], reverse=True)
+            best = combined[:n_keep]
+            history.extend(new_points)
+
+            # Проверка улучшения
+            current_best_f = best[0][2]
+            if current_best_f > prev_best_f:
+                stagnation_count = 0
+            else:
+                stagnation_count += 1
+            prev_best_f = current_best_f
+
+            print(f"Итерация {k:3d}: f = {current_best_f:6.1f} | "
+                  f"новых = {len(new_points):2d} | стагнация = {stagnation_count} | "
+                  f"t = {time() - t_total:.1f}s")
+
+            if stagnation_count >= stagnation_limit:
+                print(f"Остановка: стагнация {stagnation_limit} итераций")
+                break
+
+    # --- Результат метаэвристики ---
+    f_meta = best[0][2]
+    t_meta = time() - t_total
+    print("\n" + "=" * 60)
+    print(f"МЕТАЭВРИСТИКА: f = {f_meta}, время = {t_meta:.1f}s")
+    print(f"Всего вычислено точек: {len(history)}")
+
+    # --- Уточнение через CP-SAT с тёплым стартом ---
+    print("\n" + "=" * 60)
+    print("Уточнение через CP-SAT (warm start)...")
+    solver_cpsat, status_cpsat, x_cpsat, dt_cpsat = refine_with_cpsat(best[0][1], time_limit=600)
+
+    print("\n" + "=" * 60)
+    if status_cpsat == cp_model.OPTIMAL or status_cpsat == cp_model.FEASIBLE:
+        f_cpsat = int(solver_cpsat.objective_value)
+        delta = f_cpsat - f_meta
+        print(f"CP-SAT:       f = {f_cpsat}, статус = {solver_cpsat.status_name(status_cpsat)}, время = {dt_cpsat:.1f}s")
+        print(f"Метаэвристика: f = {f_meta}, время = {t_meta:.1f}s")
+        print(f"Улучшение:    +{delta} ({100*delta/f_meta:.1f}%)")
+        print(f"Общее время:  {t_meta + dt_cpsat:.1f}s")
     else:
-        res = None
-
-    return (res, end_time-start_time)
-
-#########################################################################
-# Функция цели
-#########################################################################
-def get_goal(schedule):
-    return sum(sales[schedule[ix]["movie"]][schedule[ix]["start"]] for ix in schedule.keys())
+        print("CP-SAT не нашёл решение")
 
 
-#########################################################################
+if __name__ == '__main__':
+    main()
 
-movie_hall_count_rand = {(h, m): 0 if hall_movie_max_shows[h, m] == 0 else np.random.randint(low=0, high=hall_movie_max_shows[h, m]) for m in movies for h in halls}
-(movie_hall_count, duration) = get_movie_hall_count(movie_hall_count_rand)
-print(f"{movie_hall_count} \n {duration}")
 
-(halls_show_count, movie_hall_seq, duration) = get_movie_hall_seq(movie_hall_count)
-print(f"{movie_hall_seq} \n {duration}")
+"""
+  ┌─────────────────┬────────────────────┬────────────────────────────┬──────────┐
+  │                 │   Global (N=20)    │            SCIP            │  CP-SAT  │
+  ├─────────────────┼────────────────────┼────────────────────────────┼──────────┤
+  │ f (цель)        │ 862                │ 84                         │ 1235     │
+  ├─────────────────┼────────────────────┼────────────────────────────┼──────────┤
+  │ Время           │ 5.1s               │ 599s                       │ 614s     │
+  ├─────────────────┼────────────────────┼────────────────────────────┼──────────┤
+  │ Статус          │ останов: стагнация │ timelimit                  │ FEASIBLE │
+  ├─────────────────┼────────────────────┼────────────────────────────┼──────────┤
+  │ Залы с сеансами │ все 10             │ только 2 (hall_9, hall_10) │ все 10   │
+  └─────────────────┴────────────────────┴────────────────────────────┴──────────┘
 
-(schedule, duration) = get_schedule(halls_show_count, movie_hall_seq)
-print(f"{schedule} \n {duration}, \n {get_goal(schedule)}")
+SCIP практически не справился — Big-M формулировка для no-overlap слишком слаба для релаксации,
+SCIP за 10 минут нашёл только тривиальное расписание в 2 залах.
+
+CP-SAT нашёл лучшее решение (1235) за 10 минут, но статус FEASIBLE — оптимум не достигнут.
+
+Global получил 70% качества CP-SAT (862 vs 1235) за ~0.8% времени (5.1s vs 614s).
+Это нормальное соотношение для метаэвристики — она не оптимальна, но на порядки быстрее.
+"""
