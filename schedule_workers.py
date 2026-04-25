@@ -13,23 +13,42 @@ sigma = np.array([float(hall_movie_max_shows[h, m]) for h, m in active_pairs])
 x_lb = np.zeros(n_active, dtype=int)
 x_ub = np.array([hall_movie_max_shows[h, m] for h, m in active_pairs], dtype=int)
 
+
 def dict_to_vec(d):
     """
     Преобразует словарь с ключами (зал, фильм) в одномерный numpy массив.
+
     Используется для эффективного хранения и обработки параметров решений.
+    Порядок элементов соответствует глобальному списку active_pairs.
+
+    Args:
+        d (dict): Словарь вида {(зал, фильм): значение}.
+
+    Returns:
+        np.ndarray: Одномерный массив значений, упорядоченных по active_pairs.
     """
     return np.array([d[h, m] for h, m in active_pairs], dtype=float)
+
 
 def vec_to_full_dict(v):
     """
     Преобразует одномерный numpy массив обратно в полный словарь.
+
     Отображает значения из вектора на все возможные пары (зал, фильм),
-    даже если для них hall_movie_max_shows равно 0.
+    даже если для них hall_movie_max_shows равно 0. Значения округляются
+    до ближайшего целого и ограничиваются нулём снизу.
+
+    Args:
+        v (np.ndarray): Вектор значений, упорядоченных по active_pairs.
+
+    Returns:
+        dict: Полный словарь {(зал, фильм): количество}, включая нулевые значения.
     """
     d = {(h, m): 0 for h in halls for m in movies}
     for i, (h, m) in enumerate(active_pairs):
         d[h, m] = max(0, int(round(v[i])))
     return d
+
 
 #############################################################
 # Решение 1: сколько сеансов каждого фильма идёт в каждом зале
@@ -54,13 +73,13 @@ def get_movie_hall_count(movie_hall_count_rand):
         - Общая продолжительность всех сеансов в зале (с учетом 5-минутных перерывов)
           не превышает длину периода T
 
-    Параметры:
+    Args:
         movie_hall_count_rand (dict): Предыдущее/случайное распределение сеансов по парам (зал, фильм)
 
-    Возвращает:
+    Returns:
         tuple: (movie_hall_count_res, solve_time), где
-            movie_hall_count_res (dict) - найденное распределение или None, если решения нет
-            solve_time (float)          - время решения в секундах
+            movie_hall_count_res (dict or None) - найденное распределение или None, если решения нет
+            solve_time (float)                  - время решения в секундах
     """
     # Создаём модель SCIP для оптимизации
     model = scip.Model("Cколько сеансов каждого фильма идёт в каждом зале")
@@ -156,11 +175,11 @@ def get_movie_hall_seq(movie_hall_count, ref_schedule=None):
     Сохраняет предпочтительные времена начала (pref_starts) из ref_schedule
     для уже существующих сеансов.
 
-    Параметры:
+    Args:
         movie_hall_count (dict): Число сеансов { (зал, фильм): количество }.
         ref_schedule (dict or None): Ссылочное расписание в формате {(зал, индекс): {"movie": имя, "start": время}}.
 
-    Возвращает:
+    Returns:
         tuple: (halls_show_count, res, solve_time, pref_starts), где
             halls_show_count (dict) - общее число сеансов в каждом зале
             res (dict)             - последовательность фильмов {(зал, индекс): фильм}
@@ -261,15 +280,15 @@ def get_schedule(halls_show_count, movie_hall_seq, pref_starts=None):
         - end = start + len
         - start[i] >= end[i-1] + 1 (зазор 5 минут)
 
-    Параметры:
+    Args:
         halls_show_count (dict): Число сеансов в каждом зале {зал: количество}.
         movie_hall_seq (dict):   Последовательность фильмов {(зал, индекс): фильм}.
         pref_starts (dict or None): Предпочитаемые времена начала {(зал, индекс): время}.
 
-    Возвращает:
+    Returns:
         tuple: (schedule, solve_time), где
-            schedule (dict) - расписание {(зал, индекс): {"movie": имя, "start": время, "end": время}} или None
-            solve_time (float) - время решения
+            schedule (dict or None) - расписание {(зал, индекс): {"movie": имя, "start": время, "end": время}}
+            solve_time (float)      - время решения
     """
     # Создаём модель CP-SAT
     model = cp_model.CpModel()
@@ -318,7 +337,6 @@ def get_schedule(halls_show_count, movie_hall_seq, pref_starts=None):
         if deviations:
             model.minimize(sum(deviations))
 
-
     # Создаём и настраиваем решатель
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 60.0
@@ -354,7 +372,13 @@ def get_goal(schedule):
     """
     Вычисляет суммарные ожидаемые продажи для данного расписания.
 
-    Сумма значений из матрицы sales для каждого сеанса.
+    Суммирует значения из матрицы sales для каждого сеанса в расписании.
+
+    Args:
+        schedule (dict): Расписание в формате {(зал, индекс): {"movie": имя, "start": время}}.
+
+    Returns:
+        float: Суммарные продажи (целевая функция).
     """
     return sum(sales[schedule[ix]["movie"]][schedule[ix]["start"]] for ix in schedule.keys())
 
@@ -364,13 +388,15 @@ def perturb_sequence(seq, halls_show_count, swap_prob):
     Модифицирует последовательность фильмов путем случайного обмена
     соседних сеансов с заданной вероятностью.
 
-    Параметры:
+    Используется для локального поиска в окрестности решения.
+
+    Args:
         seq (dict): Последовательность фильмов {(зал, индекс): фильм}.
         halls_show_count (dict): Число сеансов в каждом зале.
-        swap_prob (float): Вероятность обмена.
+        swap_prob (float): Вероятность обмена двух соседних сеансов.
 
-    Возвращает:
-        new_seq (dict): Новая последовательность.
+    Returns:
+        dict: Новая модифицированная последовательность.
     """
     new_seq = dict(seq)
     for h in halls:
@@ -386,19 +412,21 @@ def compute_packed_starts(seq, halls_show_count):
     Вычисляет времена начала сеансов, "упаковывая" их влево,
     то есть сразу после окончания предыдущего.
 
-    Параметры:
+    Используется для генерации начальных приближений времени начала.
+
+    Args:
         seq (dict): Последовательность фильмов.
         halls_show_count (dict): Число сеансов в каждом зале.
 
-    Возвращает:
-        starts (dict): Времена начала {(зал, индекс): время}.
+    Returns:
+        dict: Времена начала {(зал, индекс): время}.
     """
     starts = {}
     for h in halls:
-        t = 0 # Начинаем с нулевого времени
+        t = 0  # Начинаем с нулевого времени
         for i in range(halls_show_count[h]):
             starts[(h, i)] = t
-            t += movies[seq[h, i]].len + 1 # Добавляем длину фильма и перерыв
+            t += movies[seq[h, i]].len + 1  # Добавляем длину фильма и перерыв
     return starts
 
 
@@ -408,8 +436,11 @@ def sample_initial():
     Создает случайные параметры для первого уровня и последовательно
     решает вторую и третью подзадачи.
 
-    Возвращает:
-        tuple: (x_dict, schedule, f_val) или None, если на каком-то этапе решение не найдено.
+    Используется для инициализации популяции в метаэвристике.
+
+    Returns:
+        tuple or None: (x_dict, schedule, f_val) — параметры, расписание и значение цели,
+                       или None, если на каком-то этапе решение не найдено.
     """
     # Генерируем случайный вектор для числа сеансов
     a_vec = np.array([np.random.randint(x_lb[i], x_ub[i] + 1) for i in range(n_active)])
@@ -435,14 +466,17 @@ def search_neighborhood(ref_solution, k, alpha, sigma_y):
     Иерархический поиск в окрестности хорошего решения.
     Для каждого уровня решения создает "шумные" параметры и решает подзадачу.
 
-    Параметры:
+    Является основным механизмом генерации новых кандидатов в метаэвристике.
+
+    Args:
         ref_solution (tuple): Референсное решение (x_ref, schedule_ref, _).
         k (int): Номер итерации (для управления масштабом шума).
-        alpha (float): Коэффициент сжатия окрестности.
+        alpha (float): Коэффициент сжатия окрестности (уменьшает шум со временем).
         sigma_y (float): Базовый масштаб шума для времени начала.
 
-    Возвращает:
-        tuple: (x_new, schedule, f_val) или None.
+    Returns:
+        tuple or None: (x_new, schedule, f_val) — новое решение,
+                       или None, если решение не найдено.
     """
     x_ref, schedule_ref, _ = ref_solution
 
