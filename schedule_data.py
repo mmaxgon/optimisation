@@ -82,6 +82,10 @@ for h in halls:
 			(T // (movies[m].len + 1)) + 1
 		)
 
+# Активные компоненты x = movie_hall_count (где hall_movie_max_shows > 0)
+active_pairs = [(h, m) for h in halls for m in movies if hall_movie_max_shows[h, m] > 0]
+n_active = len(active_pairs)
+
 # Допустимые времена начала для каждого фильма (сеанс заканчивается не позднее T)
 valid_starts = {m: range(T - movies[m].len + 1) for m in movies}
 

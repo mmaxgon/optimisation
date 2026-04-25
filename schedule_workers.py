@@ -5,18 +5,13 @@ from ortools.sat.python import cp_model
 import pyscipopt as scip
 from schedule_data import *
 
-# Активные компоненты x = movie_hall_count (где hall_movie_max_shows > 0)
-active_pairs = [(h, m) for h in halls for m in movies if hall_movie_max_shows[h, m] > 0]
-n_active = len(active_pairs)
 sigma = np.array([float(hall_movie_max_shows[h, m]) for h, m in active_pairs])
 x_lb = np.zeros(n_active, dtype=int)
 x_ub = np.array([hall_movie_max_shows[h, m] for h, m in active_pairs], dtype=int)
 
-
 def dict_to_vec(d):
     """Извлечь активные компоненты из полного словаря в вектор."""
     return np.array([d[h, m] for h, m in active_pairs], dtype=float)
-
 
 def vec_to_full_dict(v):
     """Преобразовать вектор активных компонент в полный словарь."""
@@ -25,14 +20,36 @@ def vec_to_full_dict(v):
         d[h, m] = max(0, int(round(v[i])))
     return d
 
-
 #############################################################
 # Решение 1: сколько сеансов каждого фильма идёт в каждом зале
 #############################################################
 
 def get_movie_hall_count(movie_hall_count_rand):
     """
-    Cколько сеансов каждого фильма идёт в каждом зале
+    Определяет количество сеансов каждого фильма в каждом зале.
+
+    Решает задачу целочисленного программирования с использованием SCIP.
+    Целевая функция минимизирует абсолютное отклонение от предыдущего распределения
+    (movie_hall_count_rand), чтобы обеспечить плавные изменения при итерациях.
+
+    Переменные:
+        movie_count[m]      - общее число сеансов фильма m во всех залах
+        hall_count[h]       - общее число сеансов в зале h
+        movie_hall_count[h,m] - число сеансов фильма m в зале h
+
+    Ограничения:
+        - Сумма сеансов фильма по залам равна общему числу сеансов фильма
+        - Сумма сеансов в зале по фильмам равна общему числу сеансов в зале
+        - Общая продолжительность всех сеансов в зале (с учетом 5-минутных перерывов)
+          не превышает длину периода T
+
+    Параметры:
+        movie_hall_count_rand (dict): Предыдущее/случайное распределение сеансов по парам (зал, фильм)
+
+    Возвращает:
+        tuple: (movie_hall_count_res, solve_time), где
+            movie_hall_count_res (dict) - найденное распределение или None, если решения нет
+            solve_time (float)          - время решения в секундах
     """
     model = scip.Model("Cколько сеансов каждого фильма идёт в каждом зале")
 
@@ -62,6 +79,7 @@ def get_movie_hall_count(movie_hall_count_rand):
             vtype="I"
         ) for m in movies for h in halls
     }
+
 
     for m in movies:
         model.addCons(sum(movie_hall_count[h, m] for h in halls) == movie_count[m])
@@ -98,6 +116,30 @@ def get_movie_hall_count(movie_hall_count_rand):
 #############################################################
 
 def get_movie_hall_seq(movie_hall_count, ref_schedule=None):
+    """
+    Генерирует последовательность показа фильмов в каждом зале.
+
+    На основе заданного количества сеансов фильмов в залах (movie_hall_count),
+    формирует порядок их показа. При наличии ссылочного расписания (ref_schedule)
+    использует его для инициализации последовательности, затем корректирует количество
+    сеансов фильмов (добавляет/удаляет) в соответствии с movie_hall_count.
+
+    Если ref_schedule не задан, генерирует случайную перестановку.
+
+    Сохраняет предпочтительные времена начала (pref_starts) из ref_schedule
+    для уже существующих сеансов.
+
+    Параметры:
+        movie_hall_count (dict): Число сеансов { (зал, фильм): количество }.
+        ref_schedule (dict or None): Ссылочное расписание в формате {(зал, индекс): {"movie": имя, "start": время}}.
+
+    Возвращает:
+        tuple: (halls_show_count, res, solve_time, pref_starts), где
+            halls_show_count (dict) - общее число сеансов в каждом зале
+            res (dict)             - последовательность фильмов {(зал, индекс): фильм}
+            solve_time (float)      - время выполнения
+            pref_starts (dict)      - предпочтительные времена начала {(зал, индекс): время}
+    """
     halls_show_count = {h: sum(movie_hall_count[h, m] for m in movies) for h in halls}
 
     start_time = time()
@@ -158,6 +200,33 @@ def get_movie_hall_seq(movie_hall_count, ref_schedule=None):
 #############################################################
 
 def get_schedule(halls_show_count, movie_hall_seq, pref_starts=None):
+    """
+    Определяет точное время начала сеансов в каждом зале.
+
+    Решает задачу расписания с помощью CP-SAT, учитывая заданную последовательность фильмов.
+    Обеспечивает непересечение сеансов и соблюдение хронологии.
+
+    При наличии pref_starts (предпочитаемых времён начала) формулирует задачу минимизации
+    отклонений от этих времён.
+
+    Переменные:
+        start_movie_hall[h,i] - время начала i-го сеанса в зале h
+        end_movie_hall[h,i]   - время окончания i-го сеанса в зале h
+
+    Ограничения:
+        - end = start + len
+        - start[i] >= end[i-1] + 1 (зазор 5 минут)
+
+    Параметры:
+        halls_show_count (dict): Число сеансов в каждом зале {зал: количество}.
+        movie_hall_seq (dict):   Последовательность фильмов {(зал, индекс): фильм}.
+        pref_starts (dict or None): Предпочитаемые времена начала {(зал, индекс): время}.
+
+    Возвращает:
+        tuple: (schedule, solve_time), где
+            schedule (dict) - расписание {(зал, индекс): {"movie": имя, "start": время, "end": время}} или None
+            solve_time (float) - время решения
+    """
     model = cp_model.CpModel()
 
     start_movie_hall = {
