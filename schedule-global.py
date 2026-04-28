@@ -1,4 +1,6 @@
 """
+файлы schedule_data.py, schedule-cpsat.py, schedule_workers.py, schedule-global.py. Файл python: C:\ProgramData\anaconda3\envs\opt
+
 schedule-global.py — Глобальная эволюционная оптимизация расписания кинотеатра.
 
 Алгоритм:
@@ -373,7 +375,6 @@ def main():
     print(f"Всего вычислено точек: {len(history)}")
 
     # --- (Опционально) Уточнение через CP-SAT с warm start ---
-
     print("\n" + "=" * 60)
     print("Уточнение через CP-SAT (warm start)...")
     solver_cpsat, status_cpsat, x_cpsat, dt_cpsat = refine_with_cpsat(best[0][1], time_limit=600)

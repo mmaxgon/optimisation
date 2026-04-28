@@ -365,6 +365,18 @@ def get_schedule(halls_show_count, movie_hall_seq, pref_starts=None):
         show_movies = [movie_hall_seq[h, i] for i in range(n)]
         show_lens = [movies[m].len for m in show_movies]
 
+        # Границы допустимых времён начала для каждого сеанса:
+        #   ub[i] — верхняя: после i должны поместиться сеансы i+1..n-1 + перерывы
+        #   lb[i] — нижняя: до i должны поместиться сеансы 0..i-1 + перерывы
+        suffix_len = [0] * (n + 1)
+        for i in range(n - 1, -1, -1):
+            suffix_len[i] = suffix_len[i + 1] + show_lens[i]
+        ub = [T - suffix_len[i] - (n - 1 - i) for i in range(n)]
+        prefix_len = [0] * (n + 1)
+        for i in range(n):
+            prefix_len[i + 1] = prefix_len[i] + show_lens[i]
+        lb = [prefix_len[i] + i for i in range(n)]
+
         # Быстрая проверка: все ли сеансы физически помещаются в T?
         # Минимальная суммарная длительность = sum(len) + (n-1) перерывов
         min_total = sum(show_lens) + (n - 1)
@@ -374,56 +386,63 @@ def get_schedule(halls_show_count, movie_hall_seq, pref_starts=None):
 
         # --- Обратный проход: вычисляем dp и суффиксные максимумы ---
 
-        dp_arrays = [None] * n   # dp_arrays[i][t] = dp[i][t]
-        suf_arrays = [None] * n  # suf_arrays[i][t] = max(dp[i][t'] для t' >= t)
+        # Массивы хранятся с offset: dp[i][t - lb[i]] для t в [lb[i], ub[i]]
+        dp_arrays = [None] * n
+        suf_arrays = [None] * n
 
         # База: последний сеанс (i = n-1)
-        last_m = show_movies[-1]
-        last_len = show_lens[-1]
-        dp_last = [NEG_INF] * (T + 1)
-        for t in range(T - last_len + 1):
-            # Последний сеанс: продажи зависят только от времени начала
-            dp_last[t] = int(sales[last_m][t])
-        dp_arrays[n - 1] = dp_last
+        i_last = n - 1
+        lb_last, ub_last = lb[i_last], ub[i_last]
+        size_last = ub_last - lb_last + 1
+        dp_last = [NEG_INF] * size_last
+        for t in range(lb_last, ub_last + 1):
+            dp_last[t - lb_last] = int(sales[show_movies[i_last]][t])
+        dp_arrays[i_last] = dp_last
 
         # Суффиксный максимум для последнего сеанса
-        suf = [NEG_INF] * (T + 2)  # +2 чтобы безопасно обращаться suf[T+1]
-        for t in range(T, -1, -1):
-            suf[t] = max(suf[t + 1], dp_last[t])
-        suf_arrays[n - 1] = suf
+        suf = [NEG_INF] * (size_last + 1)
+        for j in range(size_last - 1, -1, -1):
+            suf[j] = max(suf[j + 1], dp_last[j])
+        suf_arrays[i_last] = suf
 
         # Остальные сеансы: от предпоследнего к первому (i = n-2 .. 0)
         for i in range(n - 2, -1, -1):
             m = show_movies[i]
             length = show_lens[i]
-            next_suf = suf_arrays[i + 1]  # Суффиксный максимум следующего сеанса
-            dp_cur = [NEG_INF] * (T + 1)
-            for t in range(T - length + 1):
-                # Если текущий сеанс начинается в t, следующий может начаться
-                # не раньше t + length + 1 (сеанс + перерыв в 1 шаг)
+            lb_i, ub_i = lb[i], ub[i]
+            size_i = ub_i - lb_i + 1
+            next_suf = suf_arrays[i + 1]
+            next_lb = lb[i + 1]
+            next_len = len(next_suf)
+            dp_cur = [NEG_INF] * size_i
+            for t in range(lb_i, ub_i + 1):
                 next_t = t + length + 1
-                future = next_suf[next_t] if next_t <= T else NEG_INF
-                # dp[i][t] = продажи_текущего + лучшие_будущие
-                dp_cur[t] = int(sales[m][t]) + future
+                idx = next_t - next_lb
+                future = next_suf[idx] if 0 <= idx < next_len else NEG_INF
+                dp_cur[t - lb_i] = int(sales[m][t]) + future
             dp_arrays[i] = dp_cur
-            # Пересчитываем суффиксный максимум для этого сеанса
-            suf = [NEG_INF] * (T + 2)
-            for t in range(T, -1, -1):
-                suf[t] = max(suf[t + 1], dp_cur[t])
+            # Суффиксный максимум для этого сеанса
+            suf = [NEG_INF] * (size_i + 1)
+            for j in range(size_i - 1, -1, -1):
+                suf[j] = max(suf[j + 1], dp_cur[j])
             suf_arrays[i] = suf
 
         # --- Прямой проход: восстанавливаем оптимальные времена начала ---
 
-        earliest = 0  # Самый ранний возможный старт (для первого сеанса — 0)
+        earliest = 0
         for i in range(n):
             m = show_movies[i]
             length = show_lens[i]
-            best_t = earliest
+            lo = max(earliest, lb[i])
+            hi = ub[i]
+            dp_arr = dp_arrays[i]
+            off = lb[i]
+            best_t = lo
             best_val = NEG_INF
-            # Ищем оптимальное время старта в допустимом диапазоне [earliest, T-length]
-            for t in range(earliest, T - length + 1):
-                if dp_arrays[i][t] > best_val:
-                    best_val = dp_arrays[i][t]
+            for t in range(lo, hi + 1):
+                val = dp_arr[t - off]
+                if val > best_val:
+                    best_val = val
                     best_t = t
             if best_val <= NEG_INF:
                 # Нет допустимого времени — расписание невозможно
