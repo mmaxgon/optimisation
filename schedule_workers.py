@@ -1,48 +1,58 @@
+"""
+schedule_workers.py — Иерархический решатель для оптимизации расписания кинотеатра.
+
+Реализует трёхуровневую декомпозицию задачи:
+  Уровень 1 (get_movie_hall_count):  сколько сеансов каждого фильма в каждом зале (SCIP)
+  Уровень 2 (get_movie_hall_seq):    в каком порядке идут фильмы в каждом зале (эвристика)
+  Уровень 3 (get_schedule):          в какое время начинается каждый сеанс (точный DP)
+
+А также функции для генерации и поиска решений:
+  sample_initial()    — генерация случайного начального решения (все 3 уровня)
+  search_neighborhood — поиск нового решения в окрестности текущего
+  get_best_sequence   — мульти-кандидатная обёртка над уровнями 2+3
+"""
+
 from time import time
 import random
 import numpy as np
-from ortools.sat.python import cp_model
 import pyscipopt as scip
 from schedule_data import *
 
-# Векторы и матрицы для быстрого доступа и операций
-# sigma: максимальное возможное число сеансов для каждой пары (зал, фильм)
-# x_lb: нижняя граница (0) для каждой переменной
-# x_ub: верхняя граница (максимальное число сеансов) для каждой переменной
+############################################################################
+# Вспомогательные векторы для работы с параметрами решений
+############################################################################
+
+# sigma — вектор масштабов шума для каждой активной пары (зал, фильм).
+# Используется в search_neighborhood для генерации нормального шума:
+#   p1_noisy = N(p1, (alpha^k) * sigma)
+# Равен верхним границам hall_movie_max_shows, чтобы шум был пропорционален
+# максимально возможному числу сеансов.
 sigma = np.array([float(hall_movie_max_shows[h, m]) for h, m in active_pairs])
+
+# x_lb — нижние границы переменных (всегда 0: сеансов может не быть).
 x_lb = np.zeros(n_active, dtype=int)
+
+# x_ub — верхние границы переменных (максимум сеансов для каждой пары).
 x_ub = np.array([hall_movie_max_shows[h, m] for h, m in active_pairs], dtype=int)
 
 
 def dict_to_vec(d):
     """
-    Преобразует словарь с ключами (зал, фильм) в одномерный numpy массив.
+    Преобразует словарь {(зал, фильм): значение} в numpy-вектор.
 
-    Используется для эффективного хранения и обработки параметров решений.
-    Порядок элементов соответствует глобальному списку active_pairs.
-
-    Args:
-        d (dict): Словарь вида {(зал, фильм): значение}.
-
-    Returns:
-        np.ndarray: Одномерный массив значений, упорядоченных по active_pairs.
+    Порядок элементов строго соответствует active_pairs.
+    Используется для перехода от словарного представления решения
+    к векторному при генерации шума в search_neighborhood.
     """
     return np.array([d[h, m] for h, m in active_pairs], dtype=float)
 
 
 def vec_to_full_dict(v):
     """
-    Преобразует одномерный numpy массив обратно в полный словарь.
+    Преобразует numpy-вектор обратно в полный словарь {(зал, фильм): значение}.
 
-    Отображает значения из вектора на все возможные пары (зал, фильм),
-    даже если для них hall_movie_max_shows равно 0. Значения округляются
-    до ближайшего целого и ограничиваются нулём снизу.
-
-    Args:
-        v (np.ndarray): Вектор значений, упорядоченных по active_pairs.
-
-    Returns:
-        dict: Полный словарь {(зал, фильм): количество}, включая нулевые значения.
+    Включает ВСЕ пары (зал, фильм), даже неактивные (для которых hall_movie_max_shows = 0).
+    Значения округляются до целых и ограничиваются нулём снизу.
     """
     d = {(h, m): 0 for h in halls for m in movies}
     for i, (h, m) in enumerate(active_pairs):
@@ -51,40 +61,36 @@ def vec_to_full_dict(v):
 
 
 #############################################################
-# Решение 1: сколько сеансов каждого фильма идёт в каждом зале
+# Уровень 1: сколько сеансов каждого фильма идёт в каждом зале
 #############################################################
 
 def get_movie_hall_count(movie_hall_count_rand):
     """
-    Определяет количество сеансов каждого фильма в каждом зале.
+    Определяет, сколько сеансов каждого фильма проходит в каждом зале.
 
-    Решает задачу целочисленного программирования с использованием SCIP.
-    Целевая функция минимизирует абсолютное отклонение от предыдущего распределения
-    (movie_hall_count_rand), чтобы обеспечить плавные изменения при итерациях.
-
-    Переменные:
-        movie_count[m]      - общее число сеансов фильма m во всех залах
-        hall_count[h]       - общее число сеансов в зале h
-        movie_hall_count[h,m] - число сеансов фильма m в зале h
-
-    Ограничения:
-        - Сумма сеансов фильма по залам равна общему числу сеансов фильма
-        - Сумма сеансов в зале по фильмам равна общему числу сеансов в зале
-        - Общая продолжительность всех сеансов в зале (с учетом 5-минутных перерывов)
-          не превышает длину периода T
+    Строит модель целочисленного линейного программирования (SCIP):
+    - Переменные: movie_count[m], hall_count[h], movie_hall_count[h,m]
+    - Ограничения:
+        * sum(movie_hall_count[h,m] по h) = movie_count[m]  — баланс по фильмам
+        * sum(movie_hall_count[h,m] по m) = hall_count[h]   — баланс по залам
+        * sum((len[m]+1) * movie_hall_count[h,m] по m) <= T+1 — время в зале
+    - Целевая: минимизация L1-отклонения от movie_hall_count_rand
+      (чтобы новое распределение было близко к предыдущему)
 
     Args:
-        movie_hall_count_rand (dict): Предыдущее/случайное распределение сеансов по парам (зал, фильм)
+        movie_hall_count_rand: целевое/предыдущее распределение {(зал,фильм): кол-во}
 
     Returns:
-        tuple: (movie_hall_count_res, solve_time), где
-            movie_hall_count_res (dict or None) - найденное распределение или None, если решения нет
-            solve_time (float)                  - время решения в секундах
+        (movie_hall_count_res, solve_time):
+            movie_hall_count_res — найденное распределение или None
+            solve_time — время решения в секундах
     """
-    # Создаём модель SCIP для оптимизации
-    model = scip.Model("Cколько сеансов каждого фильма идёт в каждом зале")
+    model = scip.Model("Сколько сеансов каждого фильма идёт в каждом зале")
 
-    # Добавляем переменные для общего числа сеансов каждого фильма
+    # --- Переменные ---
+
+    # movie_count[m] — общее число сеансов фильма m по всем залам.
+    # Границы: [movies[m].min, movies[m].max] — фильм нужно показать хотя бы min раз.
     movie_count = {
         m: model.addVar(
             name=f"{m}_count",
@@ -94,309 +100,385 @@ def get_movie_hall_count(movie_hall_count_rand):
         ) for m in movies
     }
 
-    # Добавляем переменные для общего числа сеансов в каждом зале
+    # hall_count[h] — общее число сеансов в зале h.
+    # Границы: [0, hall_max_shows[h]].
     hall_count = {
         h: model.addVar(
             name=f"{h}_count",
             lb=0,
             ub=hall_max_shows[h],
-            vtype="I"  # Целочисленная переменная
+            vtype="I"
         ) for h in halls
     }
 
-    # Добавляем переменные для числа сеансов каждого фильма в каждом зале
+    # movie_hall_count[h,m] — число сеансов фильма m в зале h.
+    # Границы: [0, hall_movie_max_shows[h,m]].
+    # Для несовместимых пар (зал не поддерживает формат фильма) верхняя граница = 0.
     movie_hall_count = {
         (h, m): model.addVar(
             name=f"{h}_{m}_count",
             lb=0,
             ub=hall_movie_max_shows[h, m],
-            vtype="I"  # Целочисленная переменная
+            vtype="I"
         ) for m in movies for h in halls
     }
 
-    # Ограничение: Сумма сеансов фильма по залам должна равняться общему числу сеансов фильма
+    # --- Ограничения ---
+
+    # Баланс по фильмам: сумма сеансов фильма по всем залам = movie_count
     for m in movies:
         model.addCons(sum(movie_hall_count[h, m] for h in halls) == movie_count[m])
-    
-    # Ограничение: Сумма сеансов в зале по фильмам должна равняться общему числу сеансов в зале
-    # Ограничение: Общая продолжительность всех сеансов в зале (с перерывами) <= T
+
+    # Баланс по залам + ограничение по времени:
+    # sum(movie_hall_count) = hall_count и
+    # суммарная длительность всех сеансов (с 5-минутными перерывами) не превышает T.
+    # (len + 1) — длительность фильма плюс один шаг перерыва.
     for h in halls:
         model.addCons(sum(movie_hall_count[h, m] for m in movies) == hall_count[h])
         model.addCons(sum((movies[m].len + 1) * movie_hall_count[h, m] for m in movies) <= T + 1)
 
-    # Вспомогательные переменные для минимизации абсолютного отклонения (L1)
+    # --- Целевая функция: минимизация L1-отклонения ---
+
+    # mu[h,m] — вспомогательная переменная, моделирующая |movie_hall_count - reference|.
+    # Линейная релаксация: mu >= x - ref и mu >= ref - x  =>  mu >= |x - ref|
     mu = {(h, m): model.addVar(name=f"mu[{h}, {m}]", vtype="C") for m in movies for h in halls}
-    # Ограничения, определяющие mu как |movie_hall_count - movie_hall_count_rand|
     for h in halls:
         for m in movies:
             model.addCons(movie_hall_count[h, m] - movie_hall_count_rand[h, m] <= mu[h, m])
             model.addCons(movie_hall_count_rand[h, m] - movie_hall_count[h, m] <= mu[h, m])
-    # Целевая функция: минимизация суммарного абсолютного отклонения
+    # Минимизируем суммарное отклонение по всем парам
     model.setObjective(sum(mu[h, m] for h in halls for m in movies), sense='minimize')
 
-    # Параметры решателя
-    model.setParam("display/verblevel", 0)  # Уровень вывода в консоль (0 - ничего)
-    model.setParam('limits/time', 10)       # Лимит времени на решение в секундах
+    # --- Параметры и решение ---
+    model.setParam("display/verblevel", 0)  # Отключаем вывод SCIP в консоль
+    model.setParam('limits/time', 10)       # Лимит: 10 секунд на одну задачу
 
-    # Запускаем оптимизацию
     start_time = time()
     model.optimize()
-    sol = model.getBestSol()  # Получаем лучшее найденное решение
+    sol = model.getBestSol()       # Лучшее найденное решение
     end_time = time()
-    status = model.getStatus() # Получаем статус решения
+    status = model.getStatus()     # Статус: "optimal", "gaplimit", "infeasible" и др.
 
-    # Обработка результата
     if status in ("optimal", "gaplimit"):
-        # Если решение найдено (оптимальное или с хорошим gap'ом), извлекаем его
-        movie_hall_count_res = {(h, m): int(round(sol[movie_hall_count[h, m]])) for h in halls for m in movies}
+        # Решение найдено — извлекаем округлённые целочисленные значения
+        movie_hall_count_res = {
+            (h, m): int(round(sol[movie_hall_count[h, m]]))
+            for h in halls for m in movies
+        }
     else:
-        # Если решение не найдено, возвращаем None
         movie_hall_count_res = None
 
-    # Возвращаем результат и время выполнения
     return (movie_hall_count_res, end_time - start_time)
 
 
 #############################################################
-# Решение 2: Последовательность фильмов в зале
+# Уровень 2: Последовательность фильмов в зале
 #############################################################
 
 def get_movie_hall_seq(movie_hall_count, ref_schedule=None):
     """
-    Генерирует последовательность показа фильмов в каждом зале.
+    Генерирует последовательность (порядок) показа фильмов в каждом зале.
 
-    На основе заданного количества сеансов фильмов в залах (movie_hall_count),
-    формирует порядок их показа. При наличии ссылочного расписания (ref_schedule)
-    использует его для инициализации последовательности, затем корректирует количество
-    сеансов фильмов (добавляет/удаляет) в соответствии с movie_hall_count.
+    Для каждого зала h:
+    - Если есть ref_schedule, берёт его последовательность как базу и
+      корректирует: удаляет лишние сеансы или добавляет недостающие.
+    - Если ref_schedule нет, генерирует случайную перестановку фильмов.
 
-    Если ref_schedule не задан, генерирует случайную перестановку.
-
-    Сохраняет предпочтительные времена начала (pref_starts) из ref_schedule
-    для уже существующих сеансов.
+    Порядок фильмов в зале определяет, какие времена начала им доступны:
+    первый сеанс может начаться в любой момент, каждый следующий —
+    только после окончания предыдущего + 1 шаг перерыва.
 
     Args:
-        movie_hall_count (dict): Число сеансов { (зал, фильм): количество }.
-        ref_schedule (dict or None): Ссылочное расписание в формате {(зал, индекс): {"movie": имя, "start": время}}.
+        movie_hall_count: {(зал, фильм): кол-во} — распределение сеансов
+        ref_schedule: ссылочное расписание {(зал, индекс): {movie, start}} или None
 
     Returns:
-        tuple: (halls_show_count, res, solve_time, pref_starts), где
-            halls_show_count (dict) - общее число сеансов в каждом зале
-            res (dict)             - последовательность фильмов {(зал, индекс): фильм}
-            solve_time (float)      - время выполнения
-            pref_starts (dict)      - предпочтительные времена начала {(зал, индекс): время}
+        (halls_show_count, res, solve_time, pref_starts):
+            halls_show_count — {зал: общее число сеансов}
+            res — {(зал, индекс): фильм} — последовательность
+            pref_starts — {(зал, индекс): время} — предпочтительные времена начала
     """
-    # Вычисляем общее число сеансов для каждого зала
+    # Вычисляем общее число сеансов в каждом зале
     halls_show_count = {h: sum(movie_hall_count[h, m] for m in movies) for h in halls}
 
     start_time = time()
-    res = {}          # Словарь для хранения последовательности фильмов
-    pref_starts = {}  # Словарь для хранения предпочтительных времён начала
-    
-    # Генерируем последовательность для каждого зала
-    for h in halls:
-        # Получаем целевое количество сеансов каждого фильма в зале h
-        new_counts = {m: movie_hall_count[h, m] for m in movies}
+    res = {}          # {(зал, индекс): имя_фильма}
+    pref_starts = {}  # {(зал, индекс): предпочитаемое_время}
 
-        # Если есть ссылочное расписание, используем его как базу
+    for h in halls:
+        new_counts = {m: movie_hall_count[h, m] for m in movies}  # Целевое кол-во по фильмам
+
         if ref_schedule is not None:
-            # Фильтруем и сортируем показы для текущего зала h
+            # --- Есть ссылочное расписание: инкрементальная модификация ---
+
+            # Извлекаем показы данного зала из ссылочного расписания, сортируем по индексу
             ref_shows = sorted(
                 [((hall, i), info) for (hall, i), info in ref_schedule.items() if hall == h],
                 key=lambda x: x[0][1]
             )
-            # Извлекаем имена фильмов и времена начала из ссылочного расписания
-            ref_items = [info["movie"] for _, info in ref_shows]
-            ref_times = [info["start"] for _, info in ref_shows]
-            # Считаем, сколько раз каждый фильм уже показывался
-            old_counts = {m: ref_items.count(m) for m in movies}
+            ref_items = [info["movie"] for _, info in ref_shows]  # Фильмы по порядку
+            ref_times = [info["start"] for _, info in ref_shows]  # Их времена начала
+            old_counts = {m: ref_items.count(m) for m in movies}  # Старое кол-во по фильмам
 
-            # Начинаем с существующей последовательности
-            items = list(ref_items)
+            items = list(ref_items)  # Текущая последовательность (мутируемая)
             times = list(ref_times)
 
-            # Если фильма стало меньше, удаляем лишние вхождения
+            # Удаляем лишние сеансы: если фильм стал показываться реже,
+            # случайно удаляем нужное число его вхождений
             for m in movies:
                 diff = old_counts[m] - new_counts[m]
                 if diff > 0:
                     for _ in range(diff):
                         indices = [idx for idx, mv in enumerate(items) if mv == m]
                         if indices:
-                            rm_idx = random.choice(indices)
+                            rm_idx = random.choice(indices)  # Случайный выбор удаляемого
                             items.pop(rm_idx)
                             times.pop(rm_idx)
 
-            # Если фильмов стало больше, добавляем новые в случайные позиции
+            # Добавляем недостающие сеансы: если фильм стал показываться чаще,
+            # вставляем новые вхождения в случайные позиции
             for m in movies:
                 diff = new_counts[m] - old_counts[m]
                 if diff > 0:
                     for _ in range(diff):
                         pos = random.randint(0, len(items))
                         items.insert(pos, m)
-                        times.insert(pos, None)
+                        times.insert(pos, None)  # Нет предпочтительного времени
 
-            # Сохраняем предпочтительные времена начала для сеансов, которые остались на своих местах
+            # Сохраняем предпочтительные времена для сеансов, унаследованных от ref
             for i, t in enumerate(times):
                 if t is not None:
                     pref_starts[(h, i)] = t
         else:
-            # Если нет ссылочного расписания, генерируем случайную последовательность
-            # Собираем элементы и их количество
+            # --- Нет ссылочного расписания: случайная перестановка ---
             elements = {m: new_counts[m] for m in movies if new_counts[m] > 0}
             items = []
             for item, count in elements.items():
-                items.extend([item] * count)
-            random.shuffle(items)
+                items.extend([item] * count)  # Каждый фильм — count раз
+            random.shuffle(items)  # Случайный порядок
 
         # Записываем итоговую последовательность для зала h
         for i in range(halls_show_count[h]):
             res[h, i] = items[i]
-    
-    end_time = time()
 
-    # Возвращаем результаты
+    end_time = time()
     return (halls_show_count, res, end_time - start_time, pref_starts)
 
 
+def get_best_sequence(movie_hall_count, ref_schedule=None, n_candidates=3):
+    """
+    Пробует несколько вариантов последовательности и выбирает лучший по продажам.
+
+    Для каждого кандидата:
+      1. Генерирует последовательность через get_movie_hall_seq
+         (первый кандидат использует ref_schedule, остальные — случайные)
+      2. Решает расписание через get_schedule (DP, максимизация продаж)
+      3. Оценивает через get_goal
+
+    Возвращает кандидата с максимальным значением целевой функции.
+
+    Args:
+        movie_hall_count: {(зал, фильм): кол-во}
+        ref_schedule: ссылочное расписание для первого кандидата или None
+        n_candidates: число вариантов (3 по умолчанию)
+
+    Returns:
+        (halls_show_count, best_seq, best_schedule, best_f_val)
+        или (None, None, None, -1), если все кандидаты неудачны
+    """
+    best_f = -1
+    best_seq = None
+    best_schedule = None
+    best_halls_show_count = None
+
+    for attempt in range(n_candidates):
+        # Первый кандидат использует ref_schedule, остальные — случайные
+        halls_show_count, seq, _, pref_starts = get_movie_hall_seq(
+            movie_hall_count,
+            ref_schedule if attempt == 0 else None
+        )
+        # Решаем расписание (DP максимизирует продажи для данной последовательности)
+        schedule, _ = get_schedule(halls_show_count, seq)
+        if schedule is not None:
+            f_val = get_goal(schedule)
+            if f_val > best_f:
+                best_f = f_val
+                best_seq = seq
+                best_schedule = schedule
+                best_halls_show_count = halls_show_count
+
+    return (best_halls_show_count, best_seq, best_schedule, best_f)
+
+
 #############################################################
-# Решение 3: Время сеансов
+# Уровень 3: Оптимальное время начала сеансов (точный DP)
 #############################################################
 
 def get_schedule(halls_show_count, movie_hall_seq, pref_starts=None):
     """
-    Определяет точное время начала сеансов в каждом зале.
+    Определяет оптимальное время начала каждого сеанса в каждом зале.
 
-    Решает задачу расписания с помощью CP-SAT, учитывая заданную последовательность фильмов.
-    Обеспечивает непересечение сеансов и соблюдение хронологии.
+    Использует динамическое программирование (DP). Для каждого зала
+    задача решается независимо, поскольку залы не взаимодействуют.
 
-    При наличии pref_starts (предпочитаемых времён начала) формулирует задачу минимизации
-    отклонений от этих времён.
+    Алгоритм для одного зала с n сеансами в фиксированном порядке:
+    ---------------------------------------------------------------
+    Обратный проход (i = n-1 .. 0):
+      dp[i][t] = максимальные суммарные продажи для сеансов i..n-1,
+                 если сеанс i начинается в момент t.
+      suf[i][t] = max(dp[i][t'] для t' >= t) — суффиксный максимум.
 
-    Переменные:
-        start_movie_hall[h,i] - время начала i-го сеанса в зале h
-        end_movie_hall[h,i]   - время окончания i-го сеанса в зале h
+    Переход:
+      dp[i][t] = sales[movie_i][t] + suf[i+1][t + len_i + 1]
+                                           ^^^^^^^^^^^^^^^^^^
+                      следующий сеанс может начаться не раньше t + len + 1
 
-    Ограничения:
-        - end = start + len
-        - start[i] >= end[i-1] + 1 (зазор 5 минут)
+    Прямой проход:
+      Для каждого сеанса i выбираем t, максимизирующий dp[i][t],
+      при условии t >= earliest (время окончания предыдущего сеанса + перерыв).
+
+    Сложность: O(n * T) на зал, где n — число сеансов, T = 288.
+    Это значительно быстрее CP-SAT с add_element, при этом даёт точное решение.
 
     Args:
-        halls_show_count (dict): Число сеансов в каждом зале {зал: количество}.
-        movie_hall_seq (dict):   Последовательность фильмов {(зал, индекс): фильм}.
-        pref_starts (dict or None): Предпочитаемые времена начала {(зал, индекс): время}.
+        halls_show_count: {зал: число_сеансов}
+        movie_hall_seq: {(зал, индекс): фильм} — последовательность
+        pref_starts: не используется (оставлено для совместимости сигнатур)
 
     Returns:
-        tuple: (schedule, solve_time), где
-            schedule (dict or None) - расписание {(зал, индекс): {"movie": имя, "start": время, "end": время}}
-            solve_time (float)      - время решения
+        (schedule, solve_time):
+            schedule — {(зал, индекс): {movie, start, end}} или None
+            solve_time — время выполнения
     """
-    # Создаём модель CP-SAT
-    model = cp_model.CpModel()
-
-    # Переменные для времени начала каждого сеанса
-    start_movie_hall = {
-        (h, i): model.new_int_var(
-            name=f"Начало сеанса {i} в зале {h} фильма {movie_hall_seq[h, i]}",
-            lb=0,
-            ub=T - movies[movie_hall_seq[h, i]].len
-        )
-        for (h, i) in movie_hall_seq.keys()
-    }
-
-    # Переменные для времени окончания каждого сеанса
-    end_movie_hall = {
-        (h, i): model.new_int_var(
-            name=f"Конец сеанса {i} в зале {h} фильма {movie_hall_seq[h, i]}",
-            lb=0,
-            ub=T
-        )
-        for (h, i) in movie_hall_seq.keys()
-    }
-
-    # Ограничение: Время окончания = Время начала + Длительность фильма
-    for (h, i) in movie_hall_seq.keys():
-        model.add(end_movie_hall[h, i] == start_movie_hall[h, i] + movies[movie_hall_seq[h, i]].len)
-
-    # Ограничение: Следующий сеанс начинается после окончания предыдущего + перерыв
-    for h in halls:
-        for i in range(1, halls_show_count[h]):
-            model.add(start_movie_hall[h, i] >= end_movie_hall[h, i - 1] + 1)
-
-    # Если заданы предпочтительные времена начала, добавляем задачу минимизации отклонений
-    if pref_starts:
-        deviations = []
-        for (h, i), pref in pref_starts.items():
-            if (h, i) in start_movie_hall:
-                # Вспомогательная переменная для отклонения
-                dev = model.new_int_var(0, T, f"dev[{h},{i}]")
-                # Ограничения, определяющие dev как |start - pref|
-                model.add(dev >= start_movie_hall[h, i] - pref)
-                model.add(dev >= pref - start_movie_hall[h, i])
-                deviations.append(dev)
-        # Целевая функция: минимизация суммы отклонений
-        if deviations:
-            model.minimize(sum(deviations))
-
-    # Создаём и настраиваем решатель
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 60.0
-    
-    # Запускаем решение
+    NEG_INF = -100000  # Значение "минус бесконечность" для недопустимых состояний
     start_time = time()
-    status = solver.solve(model)
+
+    schedule = {}
+    feasible = True
+
+    for h in halls:
+        n = halls_show_count[h]
+        if n == 0:
+            continue  # Пустой зал — пропускаем
+
+        # Предварительно извлекаем данные для скорости
+        show_movies = [movie_hall_seq[h, i] for i in range(n)]
+        show_lens = [movies[m].len for m in show_movies]
+
+        # Быстрая проверка: все ли сеансы физически помещаются в T?
+        # Минимальная суммарная длительность = sum(len) + (n-1) перерывов
+        min_total = sum(show_lens) + (n - 1)
+        if min_total > T:
+            feasible = False
+            break
+
+        # --- Обратный проход: вычисляем dp и суффиксные максимумы ---
+
+        dp_arrays = [None] * n   # dp_arrays[i][t] = dp[i][t]
+        suf_arrays = [None] * n  # suf_arrays[i][t] = max(dp[i][t'] для t' >= t)
+
+        # База: последний сеанс (i = n-1)
+        last_m = show_movies[-1]
+        last_len = show_lens[-1]
+        dp_last = [NEG_INF] * (T + 1)
+        for t in range(T - last_len + 1):
+            # Последний сеанс: продажи зависят только от времени начала
+            dp_last[t] = int(sales[last_m][t])
+        dp_arrays[n - 1] = dp_last
+
+        # Суффиксный максимум для последнего сеанса
+        suf = [NEG_INF] * (T + 2)  # +2 чтобы безопасно обращаться suf[T+1]
+        for t in range(T, -1, -1):
+            suf[t] = max(suf[t + 1], dp_last[t])
+        suf_arrays[n - 1] = suf
+
+        # Остальные сеансы: от предпоследнего к первому (i = n-2 .. 0)
+        for i in range(n - 2, -1, -1):
+            m = show_movies[i]
+            length = show_lens[i]
+            next_suf = suf_arrays[i + 1]  # Суффиксный максимум следующего сеанса
+            dp_cur = [NEG_INF] * (T + 1)
+            for t in range(T - length + 1):
+                # Если текущий сеанс начинается в t, следующий может начаться
+                # не раньше t + length + 1 (сеанс + перерыв в 1 шаг)
+                next_t = t + length + 1
+                future = next_suf[next_t] if next_t <= T else NEG_INF
+                # dp[i][t] = продажи_текущего + лучшие_будущие
+                dp_cur[t] = int(sales[m][t]) + future
+            dp_arrays[i] = dp_cur
+            # Пересчитываем суффиксный максимум для этого сеанса
+            suf = [NEG_INF] * (T + 2)
+            for t in range(T, -1, -1):
+                suf[t] = max(suf[t + 1], dp_cur[t])
+            suf_arrays[i] = suf
+
+        # --- Прямой проход: восстанавливаем оптимальные времена начала ---
+
+        earliest = 0  # Самый ранний возможный старт (для первого сеанса — 0)
+        for i in range(n):
+            m = show_movies[i]
+            length = show_lens[i]
+            best_t = earliest
+            best_val = NEG_INF
+            # Ищем оптимальное время старта в допустимом диапазоне [earliest, T-length]
+            for t in range(earliest, T - length + 1):
+                if dp_arrays[i][t] > best_val:
+                    best_val = dp_arrays[i][t]
+                    best_t = t
+            if best_val <= NEG_INF:
+                # Нет допустимого времени — расписание невозможно
+                feasible = False
+                break
+            # Записываем результат: фильм m в зале h, сеанс i
+            schedule[(h, i)] = {"movie": m, "start": best_t, "end": best_t + length}
+            # Следующий сеанс может начаться только после перерыва
+            earliest = best_t + length + 1
+
     end_time = time()
 
-    # Обработка результата
-    res = {}
-    if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        # Если решение найдено, извлекаем его
-        for h in halls:
-            for i in range(halls_show_count[h]):
-                res[(h, i)] = {
-                    "movie": movie_hall_seq[h, i],
-                    "start": solver.value(start_movie_hall[h, i]),
-                    "end": solver.value(end_movie_hall[h, i])
-                }
-    else:
-        # Если решение не найдено, возвращаем None
-        res = None
-
-    # Возвращаем результат и время выполнения
-    return (res, end_time - start_time)
+    if not feasible:
+        return (None, end_time - start_time)
+    return (schedule, end_time - start_time)
 
 
 #########################################################################
 # Функция цели
 #########################################################################
+
 def get_goal(schedule):
     """
     Вычисляет суммарные ожидаемые продажи для данного расписания.
 
-    Суммирует значения из матрицы sales для каждого сеанса в расписании.
+    Для каждого сеанса берёт sales[movie][start_time] из матрицы продаж
+    и суммирует по всем сеансам. Это значение нужно максимизировать.
 
     Args:
-        schedule (dict): Расписание в формате {(зал, индекс): {"movie": имя, "start": время}}.
+        schedule: {(зал, индекс): {movie, start, end}}
 
     Returns:
-        float: Суммарные продажи (целевая функция).
+        int: суммарные продажи
     """
     return sum(sales[schedule[ix]["movie"]][schedule[ix]["start"]] for ix in schedule.keys())
 
 
+#########################################################################
+# Вспомогательные функции для метаэвристики
+#########################################################################
+
 def perturb_sequence(seq, halls_show_count, swap_prob):
     """
-    Модифицирует последовательность фильмов путем случайного обмена
-    соседних сеансов с заданной вероятностью.
+    Модифицирует последовательность фильмов случайными обменами соседей.
 
-    Используется для локального поиска в окрестности решения.
+    Для каждого зала проходит по всем соседним парам сеансов и с вероятностью
+    swap_prob меняет их местами. Это простейший оператор мутации порядка.
 
     Args:
-        seq (dict): Последовательность фильмов {(зал, индекс): фильм}.
-        halls_show_count (dict): Число сеансов в каждом зале.
-        swap_prob (float): Вероятность обмена двух соседних сеансов.
+        seq: {(зал, индекс): фильм}
+        halls_show_count: {зал: число_сеансов}
+        swap_prob: вероятность обмена пары (0..1)
 
     Returns:
-        dict: Новая модифицированная последовательность.
+        dict: новая модифицированная последовательность
     """
     new_seq = dict(seq)
     for h in halls:
@@ -409,111 +491,102 @@ def perturb_sequence(seq, halls_show_count, swap_prob):
 
 def compute_packed_starts(seq, halls_show_count):
     """
-    Вычисляет времена начала сеансов, "упаковывая" их влево,
-    то есть сразу после окончания предыдущего.
+    Вычисляет времена начала "упаковкой влево": каждый сеанс начинается
+    сразу после окончания предыдущего (без свободных окон).
 
-    Используется для генерации начальных приближений времени начала.
+    Используется для генерации начальных приближений, когда нет
+    предпочтительных времён из предыдущего расписания.
 
     Args:
-        seq (dict): Последовательность фильмов.
-        halls_show_count (dict): Число сеансов в каждом зале.
+        seq: {(зал, индекс): фильм}
+        halls_show_count: {зал: число_сеансов}
 
     Returns:
-        dict: Времена начала {(зал, индекс): время}.
+        {(зал, индекс): время_начала}
     """
     starts = {}
     for h in halls:
-        t = 0  # Начинаем с нулевого времени
+        t = 0  # Начинаем с начала дня (шаг 0)
         for i in range(halls_show_count[h]):
             starts[(h, i)] = t
-            t += movies[seq[h, i]].len + 1  # Добавляем длину фильма и перерыв
+            t += movies[seq[h, i]].len + 1  # Длина фильма + перерыв 5 мин
     return starts
 
 
 def sample_initial():
     """
-    Генерирует случайное начальное решение.
-    Создает случайные параметры для первого уровня и последовательно
-    решает вторую и третью подзадачи.
+    Генерирует случайное начальное решение (все 3 уровня).
 
-    Используется для инициализации популяции в метаэвристике.
+    Алгоритм:
+      1. Случайный вектор числа сеансов для активных пар (зал, фильм)
+      2. Уровень 1 (SCIP): корректировка распределения до допустимого
+      3. Уровни 2+3: get_best_sequence пробует 3 варианта порядка
+         и выбирает лучший (DP максимизирует продажи для каждого)
 
     Returns:
-        tuple or None: (x_dict, schedule, f_val) — параметры, расписание и значение цели,
-                       или None, если на каком-то этапе решение не найдено.
+        (x_dict, schedule, f_val) — распределение, расписание, значение цели
+        или None, если решение не найдено
     """
-    # Генерируем случайный вектор для числа сеансов
+    # Генерируем случайный вектор: для каждой активной пары (зал, фильм)
+    # выбираем число сеансов равномерно из [0, max]
     a_vec = np.array([np.random.randint(x_lb[i], x_ub[i] + 1) for i in range(n_active)])
-    # Решаем первую подзадачу
+
+    # Уровень 1: SCIP подгоняет распределение под ограничения
     x_dict, _ = get_movie_hall_count(vec_to_full_dict(a_vec))
     if x_dict is None:
         return None
 
-    # Решаем вторую подзадачу
-    halls_show_count, seq, _, _ = get_movie_hall_seq(x_dict)
-    # Решаем третью подзадачу
-    schedule, _ = get_schedule(halls_show_count, seq)
+    # Уровни 2+3: пробуем 3 случайных порядка, DP оптимизирует продажи
+    _, _, schedule, f_val = get_best_sequence(x_dict, n_candidates=3)
     if schedule is None:
         return None
 
-    # Вычисляем значение функции цели
-    f_val = get_goal(schedule)
     return (x_dict, schedule, f_val)
 
 
 def search_neighborhood(ref_solution, k, alpha, sigma_y):
     """
-    Иерархический поиск в окрестности хорошего решения.
-    Для каждого уровня решения создает "шумные" параметры и решает подзадачу.
+    Поиск нового решения в окрестности текущего (для метаэвристики).
 
-    Является основным механизмом генерации новых кандидатов в метаэвристике.
+    Уровень 1 (мутация распределения):
+      - Текущее распределение x_ref преобразуется в вектор
+      - К вектору добавляется нормальный шум с дисперсией (alpha^k) * sigma
+      - alpha^k убывает с итерациями → шум уменьшается → сужение поиска
+      - Зашумлённый вектор подаётся в SCIP для корректировки
+
+    Уровни 2+3 (мульти-кандидатная оптимизация):
+      - get_best_sequence пробует 3 варианта порядка
+      - Первый вариант использует ref_schedule как базу
+      - DP максимизирует продажи для каждого варианта
+      - Выбирается лучший
 
     Args:
-        ref_solution (tuple): Референсное решение (x_ref, schedule_ref, _).
-        k (int): Номер итерации (для управления масштабом шума).
-        alpha (float): Коэффициент сжатия окрестности (уменьшает шум со временем).
-        sigma_y (float): Базовый масштаб шума для времени начала.
+        ref_solution: (x_ref, schedule_ref, _) — текущее лучшее решение
+        k: номер итерации (управляет масштабом шума)
+        alpha: коэффициент затухания шума (0 < alpha < 1)
+        sigma_y: базовый масштаб шума
 
     Returns:
-        tuple or None: (x_new, schedule, f_val) — новое решение,
-                       или None, если решение не найдено.
+        (x_new, schedule, f_val) или None
     """
     x_ref, schedule_ref, _ = ref_solution
 
-    # Уровень 1: Генерируем новые параметры movie_hall_count
+    # --- Уровень 1: зашумление вектора movie_hall_count ---
     p1 = dict_to_vec(x_ref)
+    # Нормальный шум с убывающей дисперсией: sigma * alpha^k
     p1_noisy = np.random.normal(p1, (alpha ** k) * sigma)
+    # Округляем и ограничиваем до допустимых целых значений
     p1_noisy = np.clip(np.round(p1_noisy), x_lb, x_ub)
+    # Решаем SCIP для получения допустимого распределения
     x_new, _ = get_movie_hall_count(vec_to_full_dict(p1_noisy))
     if x_new is None:
         return None
 
-    # Уровень 2: Генерируем новую последовательность
-    halls_show_count, seq, _, pref_starts = get_movie_hall_seq(x_new, schedule_ref)
-    swap_prob = (alpha ** k) * 0.5
-    seq = perturb_sequence(seq, halls_show_count, swap_prob)
-
-    # Уровень 3: Генерируем новые предпочтительные времена начала
-    if swap_prob > 0:
-        # Если была перестановка, используем упаковку влево
-        pref_starts = compute_packed_starts(seq, halls_show_count)
-    noise_y = (alpha ** k) * sigma_y
-    for (h, i) in seq:
-        if (h, i) in pref_starts:
-            # Добавляем нормальный шум к существующему времени
-            pref_starts[(h, i)] = int(np.clip(
-                np.round(np.random.normal(pref_starts[(h, i)], noise_y)),
-                0, T - 1
-            ))
-        else:
-            # Для нового сеанса - случайное время
-            pref_starts[(h, i)] = np.random.randint(0, T)
-    
-    # Решаем третью подзадачу
-    schedule, _ = get_schedule(halls_show_count, seq, pref_starts if pref_starts else None)
+    # --- Уровни 2+3: мульти-кандидатная оптимизация ---
+    _, _, schedule, f_val = get_best_sequence(
+        x_new, ref_schedule=schedule_ref, n_candidates=3
+    )
     if schedule is None:
         return None
 
-    # Вычисляем значение функции цели
-    f_val = get_goal(schedule)
     return (x_new, schedule, f_val)
