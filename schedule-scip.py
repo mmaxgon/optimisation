@@ -73,17 +73,26 @@ for h in halls:
 
 # сеансы не пересекаются (ограничение через BIG_M)
 # gap = 1 шаг (5 мин) между сеансами уже учтён: блокируем [tstart+1, tstart+d]
+# for h in halls:
+# 	for m in hall_movies[h]:
+# 		d = movies[m].len
+# 		for tstart in valid_starts[m]:
+# 			block = [
+# 				x[h, m1, t]
+# 				for m1 in hall_movies[h]
+# 				for t in range(tstart + 1, tstart + d + 1)
+# 				if (h, m1, t) in x
+# 			]
+# 			cons = model.addCons(d * x[h, m, tstart] + sum(block) <= d)
 for h in halls:
 	for m in hall_movies[h]:
 		d = movies[m].len
 		for tstart in valid_starts[m]:
-			block = [
-				x[h, m1, t]
-				for m1 in hall_movies[h]
-				for t in range(tstart + 1, tstart + d + 1)
-				if (h, m1, t) in x
-			]
-			cons = model.addCons(d * x[h, m, tstart] + sum(block) <= d)
+		# если сеанс начался в tstart, то блокируем [tstart+1, tstart+d]
+			for t in range(tstart + 1, min(tstart + d + 1, period[-1] - 1)):
+				block = [x[h, m1, t] for m1 in hall_movies[h] if (h, m1, t) in x]
+				if block:
+					cons = model.addCons(1 - x[h, m, tstart] >= sum(block))
 
 ############################################################################
 # Objective
