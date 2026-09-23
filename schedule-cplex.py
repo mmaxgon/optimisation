@@ -1,5 +1,6 @@
 from time import time
 import numpy as np
+np.bool = bool
 from docplex.cp.model import CpoModel
 
 ############################################################################
