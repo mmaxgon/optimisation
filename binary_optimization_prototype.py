@@ -1,466 +1,372 @@
 import numpy as np
-from scipy.optimize import linprog, milp, minimize, Bounds, LinearConstraint
+from scipy.optimize import linprog, milp, Bounds, LinearConstraint
 from time import time
 import pandas as pd
 
+
 # ============================================================
-# Problem generation
+# Генерация задачи
 # ============================================================
 N = 100
 M = 40
 np.random.seed(123)
-c = np.random.randint(1, 10, size=N).astype(float)       # maximize c @ x
-A = np.random.randint(0, 10, size=(M, N)).astype(float)  # constraint matrix
+c = np.random.randint(1, 10, size=N).astype(float)       # максимизируем c @ x
+A = np.random.randint(0, 10, size=(M, N)).astype(float)
 lb_constr = np.zeros(M)
 ub_constr = 100.0 * np.ones(M)
 
-c_min = -c  # for minimization (scipy minimizes)
+c_min = -c  # scipy минимизирует
 
-# Constraints: lb <= Ax <= ub  →  A_ub @ x <= b_ub
+# Ограничения: lb <= Ax <= ub  →  A_ub @ x <= b_ub
 A_ub = np.vstack([A, -A])
 b_ub = np.concatenate([ub_constr, -lb_constr])
 
-# ============================================================
-# Algorithm parameters
-# ============================================================
-EPS = 0.1        # tolerance for rounding (fix if |x - round(x)| < eps)
-EPS_FINE = 0.01  # fine tolerance for conservative fixing
-ALPHA = 0.2      # batch fraction
-BETA = 1.5       # penalty growth factor
-RHO_MAX = 1e4    # penalty ceiling
-K_THRESH = 30    # threshold for switching to exact MILP
-NO_PROGRESS_LIMIT = 5
-MAX_LIN_ITER = 50
-MAX_LP_ITER = 100
-NLP_GAMMAS = [1e2, 1e3, 1e4, 1e5, 1e6]
 
 # ============================================================
-# Helper: solve LP on free vars J with fixed vars I
+# Параметры алгоритма (см. раздел "Алгоритм")
 # ============================================================
-def solve_lp(I_set, J_set, x_fixed, mod_c=None):
-    """LP: min c_min[J] @ x_J  s.t.  A_ub[:,J] @ x_J <= b_ub - A_ub[:,I] @ x_I,  0<=x<=1.
-    
-    mod_c: optional array added to objective coefficients (for LP-linearization).
-    Returns (x_full, obj_val, |reduced_costs|) or (None, None, None) if infeasible.
+EPS = 1e-6            # порог целочисленности ε
+RHO_0 = 1e-3          # начальный штрафной коэффициент ρ
+GAMMA = 0.1           # параметр гарантии ненулевого штрафа γ
+BETA = 1.5            # коэффициент увеличения штрафа β
+RHO_MAX = 1e4         # потолок штрафа ρ_max
+K_THRESH = 30         # порог |J| для перехода на Шаг 3
+MAX_ITER = 200        # предохранитель от зацикливания
+
+
+# ============================================================
+# Вспомогательные функции
+# ============================================================
+def solve_lp(I, J, x_fixed, mod_c=None):
+    """LP: min c_min[J] @ x_J + mod_c @ x_J
+    при A_ub[:,J] @ x_J <= b_ub - A_ub[:,I] @ x_I,  0 <= x <= 1.
+    Возвращает (x_full, obj) или (None, None) при недопустимости.
     """
-    J = np.array(sorted(J_set), dtype=int)
-    I = np.array(sorted(I_set), dtype=int) if len(I_set) > 0 else np.array([], dtype=int)
-    
-    if len(J) == 0:
-        return x_fixed.copy(), c_min @ x_fixed, np.array([])
-    
-    obj = c_min[J].copy()
+    J_arr = np.array(sorted(J), dtype=int)
+    I_arr = np.array(sorted(I), dtype=int) if I else np.array([], dtype=int)
+
+    # --- ИСПРАВЛЕНИЕ: проверка ограничений при J = ∅ ---
+    if len(J_arr) == 0:
+        # Проверяем, что x_fixed удовлетворяет ограничениям
+        violation = A_ub @ x_fixed - b_ub
+        if np.all(violation <= 1e-8):
+            return x_fixed.copy(), float(c_min @ x_fixed)
+        else:
+            return None, None
+
+    obj = c_min[J_arr].copy()
     if mod_c is not None:
         obj = obj + mod_c
-    
-    A_J = A_ub[:, J]
-    b = b_ub.copy()
-    if len(I) > 0:
-        b = b - A_ub[:, I] @ x_fixed[I]
-    
-    res = linprog(c=obj, A_ub=A_J, b_ub=b, bounds=(0, 1), method='highs')
-    if not res.success:
-        return None, None, None
-    
-    x_full = x_fixed.copy()
-    x_full[J] = res.x
-    
-    # Reduced costs (absolute value = confidence measure)
-    rc = np.zeros(len(J))
-    try:
-        if hasattr(res, 'lower') and res.lower is not None:
-            rc += np.abs(res.lower.marginals)
-        if hasattr(res, 'upper') and res.upper is not None:
-            rc += np.abs(res.upper.marginals)
-    except Exception:
-        rc = np.abs(res.x - 0.5)
-    
-    return x_full, res.fun, rc
 
-
-# ============================================================
-# Helper: solve exact MILP on free vars J
-# ============================================================
-def solve_milp(I_set, J_set, x_fixed):
-    """MILP: min c_min[J] @ x_J  s.t.  A_ub[:,J] @ x_J <= b_ub - A_ub[:,I] @ x_I,  x in {0,1}.
-    Returns (x_full, obj_val) or (None, None) if infeasible.
-    """
-    J = np.array(sorted(J_set), dtype=int)
-    I = np.array(sorted(I_set), dtype=int) if len(I_set) > 0 else np.array([], dtype=int)
-    
-    if len(J) == 0:
-        return x_fixed.copy(), c_min @ x_fixed
-    
-    obj = c_min[J]
-    A_J = A_ub[:, J]
     b = b_ub.copy()
-    if len(I) > 0:
-        b = b - A_ub[:, I] @ x_fixed[I]
-    
-    res = milp(c=obj,
-               bounds=Bounds(lb=np.zeros(len(J)), ub=np.ones(len(J))),
-               constraints=LinearConstraint(A=A_J, ub=b),
-               integrality=[1] * len(J))
+    if len(I_arr) > 0:
+        b = b - A_ub[:, I_arr] @ x_fixed[I_arr]
+
+    res = linprog(c=obj, A_ub=A_ub[:, J_arr], b_ub=b, bounds=(0, 1), method='highs')
     if not res.success:
         return None, None
-    
+
     x_full = x_fixed.copy()
-    x_full[J] = res.x
-    return x_full, res.fun
+    x_full[J_arr] = res.x
+    return x_full, float(res.fun)
 
 
-# ============================================================
-# Helper: try to fix a batch of variables
-# ============================================================
-def try_fix(I_set, J_set, x_fixed, batch, x_vals):
-    """Try fixing batch of vars to round(x_vals[batch]). Check LP feasibility."""
-    new_x = x_fixed.copy()
-    for i in batch:
-        new_x[i] = round(x_vals[i])
-    new_I = I_set | set(int(i) for i in batch)
-    new_J = J_set - set(int(i) for i in batch)
-    x, _, _ = solve_lp(new_I, new_J, new_x)
-    return (x is not None), new_I, new_J, new_x
+def solve_milp(I, J, x_fixed):
+    """MILP на свободных переменных J. Возвращает (x_full, obj) или (None, None)."""
+    J_arr = np.array(sorted(J), dtype=int)
+    I_arr = np.array(sorted(I), dtype=int) if I else np.array([], dtype=int)
 
-
-# ============================================================
-# Helper: batch fixing with binary-search backtracking
-# ============================================================
-def fix_batch(I_set, J_set, x_fixed, candidates, x_vals, alpha):
-    """Fix candidates in batches. On failure, halve batch size (binary search).
-    Returns (new_I, new_J, new_x_fixed, fix_history).
-    """
-    fix_history = []
-    if len(candidates) == 0:
-        return I_set, J_set, x_fixed, fix_history
-    
-    # Sort by distance from 0.5 (most confident = closest to 0/1 first)
-    dist = np.abs(x_vals[candidates] - 0.5)
-    order = np.argsort(-dist)
-    cand_sorted = candidates[order]
-    
-    batch_size = min(int(np.ceil(alpha * len(cand_sorted))), len(cand_sorted))
-    
-    while batch_size > 0:
-        batch = cand_sorted[:batch_size]
-        ok, new_I, new_J, new_x = try_fix(I_set, J_set, x_fixed, batch, x_vals)
-        if ok:
-            fix_history.append(list(int(i) for i in batch))
-            return new_I, new_J, new_x, fix_history
-        batch_size = batch_size // 2
-    
-    return I_set, J_set, x_fixed, fix_history
-
-
-# ============================================================
-# Phase 1: LP fix-and-propagate
-# ============================================================
-def phase1_lp(I_set, J_set, x_fixed, eps=EPS, alpha=ALPHA, max_iter=MAX_LP_ITER):
-    """Repeatedly solve LP, fix near-binary variables in batches with backtracking.
-    Returns (ok, I, J, x_fixed, fix_history, lp_obj).
-    """
-    fix_history_all = []
-    lp_obj = None
-    
-    for _ in range(max_iter):
-        x, lp_obj, rc = solve_lp(I_set, J_set, x_fixed)
-        if x is None:
-            return False, I_set, J_set, x_fixed, fix_history_all, lp_obj
-        
-        J_arr = np.array(sorted(J_set), dtype=int)
-        if len(J_arr) == 0:
-            break
-        
-        mask = np.abs(x[J_arr] - np.round(x[J_arr])) < eps
-        candidates = J_arr[mask]
-        
-        if len(candidates) == 0:
-            break
-        
-        new_I, new_J, new_x, hist = fix_batch(I_set, J_set, x_fixed, candidates, x, alpha)
-        if len(hist) == 0:
-            break
-        
-        I_set, J_set, x_fixed = new_I, new_J, new_x
-        fix_history_all.extend(hist)
-    
-    return True, I_set, J_set, x_fixed, fix_history_all, lp_obj
-
-
-# ============================================================
-# Phase 2a: LP-Linearization (homotopy with linearized concave penalty)
-# ============================================================
-def phase2_lp_lin(I_set, J_set, x_fixed, eps=EPS, alpha=ALPHA, beta=BETA,
-                  rho_max=RHO_MAX, max_iter=MAX_LIN_ITER,
-                  no_progress_limit=NO_PROGRESS_LIMIT, k_thresh=K_THRESH):
-    """LP-linearization phase.
-    
-    Replaces NLP min(c + rho*sum(x_i*(1-x_i))) with a sequence of LP:
-      min (c_min[J] + rho*(1 - 2*x_bar)) @ x_J   [linearized objective]
-    
-    rho grows geometrically; variables deeply fractional at 0.5 get faster growth.
-    Near-binary variables are fixed in batches with backtracking.
-    """
-    fix_history_all = []
-    
-    J_arr = np.array(sorted(J_set), dtype=int)
     if len(J_arr) == 0:
-        return True, I_set, J_set, x_fixed, fix_history_all
-    
-    # Initialize rho: small, proportional to |c_i|
-    rho = np.abs(c[J_arr]) * 0.0025
-    no_progress = 0
-    
-    for iteration in range(max_iter):
-        J_arr = np.array(sorted(J_set), dtype=int)
-        if len(J_arr) == 0:
-            break
-        
-        # Current LP solution (for linearization point)
-        x_base, _, _ = solve_lp(I_set, J_set, x_fixed)
-        if x_base is None:
-            return False, I_set, J_set, x_fixed, fix_history_all
-        
-        x_bar = x_base[J_arr]
-        
-        # Linearized penalty: rho_i * (1 - 2*x_bar_i) added to c_min
-        # If x_bar < 0.5 → positive addition → pushes x_i toward 0
-        # If x_bar > 0.5 → negative addition → pushes x_i toward 1
-        mod_c = rho * (1 - 2 * x_bar)
-        
-        x_new, _, rc_new = solve_lp(I_set, J_set, x_fixed, mod_c=mod_c)
-        if x_new is None:
-            return False, I_set, J_set, x_fixed, fix_history_all
-        
-        x_new_J = x_new[J_arr]
-        
-        # Fix near-binary
-        mask = np.abs(x_new_J - np.round(x_new_J)) < eps
-        candidates = J_arr[mask]
-        
-        if len(candidates) > 0:
-            new_I, new_J, new_x, hist = fix_batch(I_set, J_set, x_fixed, candidates, x_new, alpha)
-            if len(hist) > 0:
-                I_set, J_set, x_fixed = new_I, new_J, new_x
-                fix_history_all.extend(hist)
-                no_progress = 0
-                # Update rho for remaining J
-                new_J_arr = np.array(sorted(J_set), dtype=int)
-                old_rho = {int(j): rho[idx] for idx, j in enumerate(J_arr)}
-                rho = np.array([old_rho.get(int(j), np.abs(c[int(j)]) * 0.0025) for j in new_J_arr])
-            else:
-                no_progress += 1
+        violation = A_ub @ x_fixed - b_ub
+        if np.all(violation <= 1e-8):
+            return x_fixed.copy(), float(c_min @ x_fixed)
         else:
-            no_progress += 1
-        
-        # Increase rho (faster for deeply fractional variables)
-        for idx in range(len(J_arr)):
-            if idx < len(x_new_J) and abs(x_new_J[idx] - 0.5) < 0.1:
-                rho[idx] = min(rho[idx] * beta**2, rho_max)
-            else:
-                rho[idx] = min(rho[idx] * beta, rho_max)
-        
-        # Termination checks
-        if len(J_set) <= k_thresh:
-            break
-        if no_progress >= no_progress_limit:
-            break
-        if np.all(rho >= rho_max):
-            break
-    
-    return True, I_set, J_set, x_fixed, fix_history_all
+            return None, None
+
+    b = b_ub.copy()
+    if len(I_arr) > 0:
+        b = b - A_ub[:, I_arr] @ x_fixed[I_arr]
+
+    res = milp(c=c_min[J_arr],
+               bounds=Bounds(lb=np.zeros(len(J_arr)), ub=np.ones(len(J_arr))),
+               constraints=LinearConstraint(A=A_ub[:, J_arr], ub=b),
+               integrality=[1] * len(J_arr))
+    if not res.success:
+        return None, None
+
+    x_full = x_fixed.copy()
+    x_full[J_arr] = res.x
+    return x_full, float(res.fun)
 
 
-# ============================================================
-# Phase 2b: NLP Penalty (for comparison — concave minimization)
-# ============================================================
-def phase2_nlp(I_set, J_set, x_fixed, eps=EPS, gammas=None):
-    """NLP penalty phase using scipy.optimize.minimize (SLSQP).
-    
-    Solves: min c_min[J]@x + gamma * sum(x_i*(1-x_i))  s.t.  linear constraints, 0<=x<=1.
-    NOTE: objective is concave → SLSQP finds local (not global) minimum.
+def is_binary(x, eps=EPS):
+    """Почти бинарная компонента: |x - round(x)| < ε."""
+    return abs(x - round(x)) < eps
+
+
+def split_I_half(I_cand, x_vals):
+    """Делит I_cand пополам, оставляя половину с минимальными
+    отклонениями от бинарности. Возвращает (keep, moved).
     """
-    if gammas is None:
-        gammas = NLP_GAMMAS
-    
-    fix_history_all = []
-    
-    # Start from LP solution
-    x_start, _, _ = solve_lp(I_set, J_set, x_fixed)
-    if x_start is None:
-        return False, I_set, J_set, x_fixed, fix_history_all
-    
-    no_progress = 0
-    
-    for gamma in gammas:
-        J_arr = np.array(sorted(J_set), dtype=int)
-        if len(J_arr) == 0:
-            break
-        
-        x0 = x_start[J_arr].copy()
-        
-        def obj_nlp(x_J, g=gamma, j=J_arr):
-            return c_min[j] @ x_J + g * np.sum(x_J * (1 - x_J))
-        
-        def grad_nlp(x_J, g=gamma, j=J_arr):
-            return c_min[j] + g * (1 - 2 * x_J)
-        
-        I_arr = np.array(sorted(I_set), dtype=int) if len(I_set) > 0 else np.array([], dtype=int)
-        b = b_ub.copy()
-        if len(I_arr) > 0:
-            b = b - A_ub[:, I_arr] @ x_fixed[I_arr]
-        A_J = A_ub[:, J_arr]
-        
-        lc = LinearConstraint(A=A_J, ub=b)
-        bds = Bounds(lb=np.zeros(len(J_arr)), ub=np.ones(len(J_arr)))
-        
-        res = minimize(fun=obj_nlp, x0=x0, jac=grad_nlp,
-                       bounds=bds, constraints=[lc],
-                       method='SLSQP', options={'maxiter': 200, 'ftol': 1e-8})
-        
-        x_start = x_fixed.copy()
-        x_start[J_arr] = res.x
-        
-        # Fix near-binary
-        mask = np.abs(res.x - np.round(res.x)) < eps
-        candidates = J_arr[mask]
-        
-        if len(candidates) > 0:
-            new_I, new_J, new_x, hist = fix_batch(I_set, J_set, x_fixed, candidates, x_start, 0.3)
-            if len(hist) > 0:
-                I_set, J_set, x_fixed = new_I, new_J, new_x
-                fix_history_all.extend(hist)
-                no_progress = 0
-            else:
-                no_progress += 1
-        else:
-            no_progress += 1
-        
-        if no_progress >= 3:
-            break
-    
-    return True, I_set, J_set, x_fixed, fix_history_all
+    deviations = [(i, abs(x_vals[i] - round(x_vals[i]))) for i in I_cand]
+    deviations.sort(key=lambda t: t[1])
+    half = max(1, len(deviations) // 2)
+    keep = set(i for i, _ in deviations[:half])
+    moved = set(i for i, _ in deviations[half:])
+    return keep, moved
+
+
+def try_fix(I, J, x_fixed, I_cand, x_vals):
+    """Пытается зафиксировать кандидатов I_cand, округляя их.
+    При недопустимости делит I_cand пополам (бисекция множества).
+    Возвращает (ok, I, J, x_fixed).
+    """
+    I_cand = set(I_cand)
+    if not I_cand:
+        return False, I, J, x_fixed
+
+    # Округляем кандидатов
+    x_new = x_fixed.copy()
+    for i in I_cand:
+        x_new[i] = round(x_vals[i])
+
+    new_I = I | I_cand
+    new_J = J - I_cand
+    x_test, _ = solve_lp(new_I, new_J, x_new)
+
+    if x_test is not None:
+        return True, new_I, new_J, x_new
+
+    # --- ИСПРАВЛЕНИЕ BUG 1: проверка |I_cand| <= 1 перед рекурсией ---
+    if len(I_cand) <= 1:
+        return False, I, J, x_fixed
+
+    # Недопустимо — бисекция множества I_cand
+    I_keep, _ = split_I_half(I_cand, x_vals)
+    return try_fix(I, J, x_fixed, I_keep, x_vals) if I_keep else (False, I, J, x_fixed)
 
 
 # ============================================================
-# Phase 3: Exact MILP on remaining variables
+# Шаг 0 и Шаг 1: округление почти бинарных переменных
 # ============================================================
-def phase3_exact(I_set, J_set, x_fixed):
-    """Solve exact MILP on free variables J. Returns (x_full, obj_val, |J|) or (None, None, |J|)."""
-    x_full, obj = solve_milp(I_set, J_set, x_fixed)
+def rounding_step(I, J, x_fixed, came_from, eps=EPS, max_iter=MAX_ITER):
+    """Шаг 0 (came_from='start') или Шаг 1 (came_from='step2').
+    Возвращает (status, I, J, x_fixed, next_action).
+    """
+    if not J:
+        return 'return_true', I, J, x_fixed, 'done'
+
+    if len(J) <= K_THRESH:
+        return 'goto_step3', I, J, x_fixed, 'step3'
+
+    # --- ИСПРАВЛЕНИЕ BUG 3: при переходе из Шага 2 сначала проверяем
+    #     входящее решение (LP-3), а не решаем plain LP заново ---
+    if came_from == 'step2':
+        I_cand_init = set(i for i in J if is_binary(x_fixed[i], eps))
+        if I_cand_init:
+            ok, new_I, new_J, new_x = try_fix(I, J, x_fixed, I_cand_init, x_fixed)
+            if ok:
+                I, J, x_fixed = new_I, new_J, new_x
+                if not J:
+                    return 'return_true', I, J, x_fixed, 'done'
+                if len(J) <= K_THRESH:
+                    return 'goto_step3', I, J, x_fixed, 'step3'
+                # Успешно зафиксировали из LP-3 — продолжаем цикл с plain LP
+            # Если не удалось — продолжаем с plain LP ниже
+
+    for _ in range(max_iter):
+        x, _ = solve_lp(I, J, x_fixed)
+        if x is None:
+            return ('fail' if came_from == 'step2' else 'goto_step2'), I, J, x_fixed, \
+                   ('done' if came_from == 'step2' else 'step2')
+
+        I_cand = set(i for i in J if is_binary(x[i], eps))
+
+        if not I_cand:
+            if came_from == 'step2':
+                return 'fail', I, J, x_fixed, 'done'
+            return 'goto_step2', I, J, x_fixed, 'step2'
+
+        ok, new_I, new_J, new_x = try_fix(I, J, x_fixed, I_cand, x)
+
+        if not ok:
+            if came_from == 'step2':
+                return 'fail', I, J, x_fixed, 'done'
+            return 'goto_step2', I, J, x_fixed, 'step2'
+
+        I, J, x_fixed = new_I, new_J, new_x
+
+        if not J:
+            return 'return_true', I, J, x_fixed, 'done'
+        if len(J) <= K_THRESH:
+            return 'goto_step3', I, J, x_fixed, 'step3'
+
+    if came_from == 'step2':
+        return 'fail', I, J, x_fixed, 'done'
+    return 'goto_step2', I, J, x_fixed, 'step2'
+
+
+# ============================================================
+# Шаг 2: линеаризованный штраф
+# ============================================================
+def penalty_step(I, J, x_fixed, rho, eps=EPS, max_iter=MAX_ITER):
+    """Шаг 2. Решает (LP-3) с линеаризованным штрафом.
+    Возвращает (status, I, J, x_fixed, rho, next_action).
+    """
+    if not J:
+        return 'return_true', I, J, x_fixed, rho, 'done'
+
+    J_arr = np.array(sorted(J), dtype=int)
+
+    # --- ИСПРАВЛЕНИЕ BUG 2: начальная точка линеаризации ---
+    # Стартуем из входящего решения (plain LP)
+    x_current, _ = solve_lp(I, J, x_fixed)
+    if x_current is None:
+        return 'fail', I, J, x_fixed, rho, 'done'
+
+    for _ in range(max_iter):
+        x_bar = x_current[J_arr]   # точка линеаризации — обновляется!
+
+        # Индивидуальные штрафные множители:
+        #   ρ_i = ρ · ((1 − 2·x̄_i)² + γ)
+        rho_i = rho * ((1 - 2 * x_bar) ** 2 + GAMMA)
+
+        # Линеаризованный штраф: добавляем ρ_i · (1 − 2·x̄_i) к c_min
+        mod_c = rho_i * (1 - 2 * x_bar)
+
+        # Решаем (LP-3) с модифицированной целевой функцией
+        x_new, _ = solve_lp(I, J, x_fixed, mod_c=mod_c)
+        if x_new is None:
+            return 'fail', I, J, x_fixed, rho, 'done'
+
+        # Кандидаты на округление
+        I_cand = set(i for i in J if is_binary(x_new[i], eps))
+
+        if I_cand:
+            # Сбрасываем ρ в начальное значение и возвращаемся на Шаг 1
+            return 'goto_step1', I, J, x_new, RHO_0, 'step1'
+
+        # --- ИСПРАВЛЕНИЕ BUG 2: обновляем точку линеаризации ---
+        x_current = x_new
+
+        # Кандидатов нет — увеличиваем штраф
+        rho = rho * BETA
+        if rho > RHO_MAX:
+            return 'fail', I, J, x_fixed, rho, 'done'
+
+    return 'fail', I, J, x_fixed, rho, 'done'
+
+
+# ============================================================
+# Шаг 3: точное решение MILP
+# ============================================================
+def exact_step(I, J, x_fixed, k_thresh=K_THRESH):
+    """Шаг 3. Решает MILP на J.
+    При несовместности откатывает последний батч и увеличивает K.
+    Возвращает (x_full, obj) или (None, None).
+    """
+    x_full, obj = solve_milp(I, J, x_fixed)
+    if x_full is not None:
+        return x_full, obj
+
+    # MILP несовместна — увеличиваем K и пробуем с большим |J|
+    # (упрощённая версия отката: просто возвращаем None,
+    #  вызывающий код может повторить с большим K)
+    return None, None
+
+
+# ============================================================
+# Главный цикл алгоритма
+# ============================================================
+def run_algorithm(k_thresh=K_THRESH, eps=EPS):
+    """Основной алгоритм: Шаг 0 → Шаг 1 ↔ Шаг 2 → Шаг 3."""
+    I, J = set(), set(range(N))
+    x_fixed = np.zeros(N)
+
+    # Шаг 0: начальное округление (came_from='start')
+    status, I, J, x_fixed, action = rounding_step(I, J, x_fixed, came_from='start', eps=eps)
+    if status == 'return_true':
+        return x_fixed, c @ x_fixed
+    if status == 'fail':
+        return None, None
+
+    rho = RHO_0
+
+    # Основной цикл: Шаг 1 ↔ Шаг 2
+    for _ in range(MAX_ITER):
+        if action == 'step3':
+            break
+        if action == 'step2':
+            status, I, J, x_fixed, rho, action = penalty_step(I, J, x_fixed, rho, eps=eps)
+            if status == 'return_true':
+                return x_fixed, c @ x_fixed
+            if status == 'fail':
+                return None, None
+            continue
+        if action == 'step1':
+            status, I, J, x_fixed, action = rounding_step(I, J, x_fixed, came_from='step2', eps=eps)
+            if status == 'return_true':
+                return x_fixed, c @ x_fixed
+            if status == 'fail':
+                return None, None
+            continue
+        if action == 'done':
+            break
+
+    # Шаг 3: точное MILP
+    x_full, obj = exact_step(I, J, x_fixed)
     if x_full is None:
-        return None, None, len(J_set)
-    return x_full, obj, len(J_set)
+        return None, None
+    return x_full, c @ x_full
 
 
 # ============================================================
-# Main: run all algorithms and compare
+# Сравнение с эталонами
 # ============================================================
 def run_all():
     results = []
-    
-    # --- Reference: LP relaxation ---
+
+    # Эталон 1: LP-релаксация
     t0 = time()
     res_lp = linprog(c=c_min, A_ub=A_ub, b_ub=b_ub, bounds=(0, 1), method='highs')
     t_lp = time() - t0
-    x_lp = res_lp.x
-    val_lp = c @ x_lp
-    
-    # --- Reference: Direct MILP ---
+    val_lp = c @ res_lp.x
+
+    # Эталон 2: прямое MILP
     t0 = time()
     res_milp = milp(c=c_min, bounds=Bounds(0, 1),
                     constraints=LinearConstraint(A=A_ub, ub=b_ub),
-                    integrality=[1]*N)
+                    integrality=[1] * N)
     t_milp = time() - t0
-    x_milp = res_milp.x
-    val_milp = c @ x_milp
-    
-    results.append({'Algorithm': 'LP relaxation', 'Value': val_lp, 'Time': t_lp,
-                    'Gap%': (val_milp - val_lp)/abs(val_milp)*100, '|J|': N, 'OK': True})
-    results.append({'Algorithm': 'Direct MILP (exact)', 'Value': val_milp, 'Time': t_milp,
-                    'Gap%': 0.0, '|J|': 0, 'OK': True})
-    
-    # --- Algorithm A: LP + LP-Lin + Exact ---
-    I, J, x = set(), set(range(N)), np.zeros(N)
+    val_milp = c @ res_milp.x
+
+    results.append({'Алгоритм': 'LP-релаксация', 'Значение': val_lp, 'Время': t_lp,
+                    'Разрыв %': (val_milp - val_lp) / abs(val_milp) * 100})
+    results.append({'Алгоритм': 'Прямое MILP', 'Значение': val_milp, 'Время': t_milp,
+                    'Разрыв %': 0.0})
+
+    # Наш алгоритм
     t0 = time()
-    _, I, J, x, _, _ = phase1_lp(I, J, x, eps=EPS)
-    n_p1 = len(J)
-    _, I, J, x, _ = phase2_lp_lin(I, J, x, eps=EPS)
-    n_p2 = len(J)
-    if n_p2 > 0:
-        x_f, _, _ = phase3_exact(I, J, x)
+    x_alg, val_alg = run_algorithm()
+    t_alg = time() - t0
+    if val_alg is not None:
+        gap = (val_milp - val_alg) / abs(val_milp) * 100
     else:
-        x_f = x
-    t_a = time() - t0
-    val_a = c @ x_f if x_f is not None else None
-    gap_a = (val_milp - val_a)/abs(val_milp)*100 if val_a is not None else None
-    results.append({'Algorithm': 'A: LP+LP-Lin+Exact', 'Value': val_a, 'Time': t_a,
-                    'Gap%': gap_a, '|J|': n_p2, 'OK': x_f is not None})
-    
-    # --- Algorithm A': LP + LP-Lin + Exact (eps=0.01) ---
-    I, J, x = set(), set(range(N)), np.zeros(N)
-    t0 = time()
-    _, I, J, x, _, _ = phase1_lp(I, J, x, eps=EPS_FINE)
-    _, I, J, x, _ = phase2_lp_lin(I, J, x, eps=EPS_FINE)
-    if len(J) > 0:
-        x_f, _, _ = phase3_exact(I, J, x)
-    else:
-        x_f = x
-    t_a2 = time() - t0
-    val_a2 = c @ x_f if x_f is not None else None
-    gap_a2 = (val_milp - val_a2)/abs(val_milp)*100 if val_a2 is not None else None
-    results.append({'Algorithm': "A': LP+LP-Lin+Exact (eps=0.01)", 'Value': val_a2, 'Time': t_a2,
-                    'Gap%': gap_a2, '|J|': len(J), 'OK': x_f is not None})
-    
-    # --- Algorithm B: LP + NLP + Exact ---
-    I, J, x = set(), set(range(N)), np.zeros(N)
-    t0 = time()
-    _, I, J, x, _, _ = phase1_lp(I, J, x, eps=EPS)
-    _, I, J, x, _ = phase2_nlp(I, J, x, eps=EPS)
-    if len(J) > 0:
-        x_f, _, _ = phase3_exact(I, J, x)
-    else:
-        x_f = x
-    t_b = time() - t0
-    val_b = c @ x_f if x_f is not None else None
-    gap_b = (val_milp - val_b)/abs(val_milp)*100 if val_b is not None else None
-    results.append({'Algorithm': 'B: LP+NLP+Exact', 'Value': val_b, 'Time': t_b,
-                    'Gap%': gap_b, '|J|': len(J), 'OK': x_f is not None})
-    
-    # --- Algorithm C: LP + Exact (no Phase 2) ---
-    I, J, x = set(), set(range(N)), np.zeros(N)
-    t0 = time()
-    _, I, J, x, _, _ = phase1_lp(I, J, x, eps=EPS)
-    if len(J) > 0:
-        x_f, _, _ = phase3_exact(I, J, x)
-    else:
-        x_f = x
-    t_c = time() - t0
-    val_c = c @ x_f if x_f is not None else None
-    gap_c = (val_milp - val_c)/abs(val_milp)*100 if val_c is not None else None
-    results.append({'Algorithm': 'C: LP+Exact', 'Value': val_c, 'Time': t_c,
-                    'Gap%': gap_c, '|J|': len(J), 'OK': x_f is not None})
-    
-    # --- Print results ---
+        gap = None
+    results.append({'Алгоритм': 'Шаги 0–3 (наш)', 'Значение': val_alg, 'Время': t_alg,
+                    'Разрыв %': gap})
+
     df = pd.DataFrame(results)
-    print("="*85)
-    print(f"  PROBLEM: N={N}, M={M},  maximize c@x,  0<=Ax<=100,  x in {{0,1}}")
-    print("="*85)
-    print(df.to_string(index=False, float_format=lambda x: f"{x:.4f}" if abs(x)<100 else f"{x:.1f}"))
-    print("="*85)
-    
-    print(f"\n  Phase breakdown (Algorithm A, eps={EPS}):")
-    print(f"    Phase 1 (LP):          |J| {N} → {n_p1}")
-    print(f"    Phase 2a (LP-Lin):     |J| {n_p1} → {n_p2}")
-    print(f"    Phase 3 (Exact MILP):  |J| {n_p2} → 0")
-    print(f"    Total time: {t_a:.4f}s  vs  MILP {t_milp:.4f}s  ({t_milp/t_a:.1f}x speedup)")
-    
-    print(f"\n  Phase breakdown (Algorithm A', eps={EPS_FINE}):")
-    print(f"    Total time: {t_a2:.4f}s  vs  MILP {t_milp:.4f}s  ({t_milp/t_a2:.1f}x speedup)")
-    if gap_a2 is not None:
-        print(f"    Gap: {gap_a2:.2f}%  (exact match with MILP!)" if gap_a2 == 0 else f"    Gap: {gap_a2:.2f}%")
-    
+    print("=" * 75)
+    print(f"  ЗАДАЧА: N={N}, M={M},  max c@x,  0 <= Ax <= 100,  x ∈ {{0,1}}")
+    print("=" * 75)
+    print(df.to_string(index=False))
+    print("=" * 75)
+    print(f"\n  Ускорение относительно прямого MILP: {t_milp / t_alg:.1f}x")
+    if gap is not None:
+        print(f"  Разрыв с оптимумом: {gap:.2f}%")
     return df
 
+
 if __name__ == '__main__':
-    df = run_all()
+    run_all()
