@@ -135,7 +135,9 @@ def try_fix(I, J, x_fixed, I_cand, x_vals):
     x_test, _ = solve_lp(new_I, new_J, x_new)
 
     if x_test is not None:
-        return True, new_I, new_J, x_new
+        # Возвращаем найденное допустимое продолжение, а не только
+        # вектор после округления фиксируемых переменных.
+        return True, new_I, new_J, x_test
 
     # --- ИСПРАВЛЕНИЕ BUG 1: проверка |I_cand| <= 1 перед рекурсией ---
     if len(I_cand) <= 1:
@@ -149,14 +151,15 @@ def try_fix(I, J, x_fixed, I_cand, x_vals):
 # ============================================================
 # Шаг 0 и Шаг 1: округление почти бинарных переменных
 # ============================================================
-def rounding_step(I, J, x_fixed, came_from, eps=EPS, max_iter=MAX_ITER):
+def rounding_step(I, J, x_fixed, came_from, eps=EPS,
+                   k_thresh=K_THRESH, max_iter=MAX_ITER):
     """Шаг 0 (came_from='start') или Шаг 1 (came_from='step2').
     Возвращает (status, I, J, x_fixed, next_action).
     """
     if not J:
         return 'return_true', I, J, x_fixed, 'done'
 
-    if len(J) <= K_THRESH:
+    if len(J) <= k_thresh:
         return 'goto_step3', I, J, x_fixed, 'step3'
 
     # --- ИСПРАВЛЕНИЕ BUG 3: при переходе из Шага 2 сначала проверяем
@@ -169,7 +172,7 @@ def rounding_step(I, J, x_fixed, came_from, eps=EPS, max_iter=MAX_ITER):
                 I, J, x_fixed = new_I, new_J, new_x
                 if not J:
                     return 'return_true', I, J, x_fixed, 'done'
-                if len(J) <= K_THRESH:
+                if len(J) <= k_thresh:
                     return 'goto_step3', I, J, x_fixed, 'step3'
                 # Успешно зафиксировали из LP-3 — продолжаем цикл с plain LP
             # Если не удалось — продолжаем с plain LP ниже
@@ -198,7 +201,7 @@ def rounding_step(I, J, x_fixed, came_from, eps=EPS, max_iter=MAX_ITER):
 
         if not J:
             return 'return_true', I, J, x_fixed, 'done'
-        if len(J) <= K_THRESH:
+        if len(J) <= k_thresh:
             return 'goto_step3', I, J, x_fixed, 'step3'
 
     if came_from == 'step2':
@@ -212,6 +215,10 @@ def rounding_step(I, J, x_fixed, came_from, eps=EPS, max_iter=MAX_ITER):
 def penalty_step(I, J, x_fixed, rho, eps=EPS, max_iter=MAX_ITER):
     """Шаг 2. Решает (LP-3) с линеаризованным штрафом.
     Возвращает (status, I, J, x_fixed, rho, next_action).
+
+    status='fail' означает, что эвристика не смогла продолжить
+    при заданных параметрах; это не является доказательством
+    неразрешимости исходной IP.
     """
     if not J:
         return 'return_true', I, J, x_fixed, rho, 'done'
@@ -262,7 +269,6 @@ def penalty_step(I, J, x_fixed, rho, eps=EPS, max_iter=MAX_ITER):
 # ============================================================
 def exact_step(I, J, x_fixed, k_thresh=K_THRESH):
     """Шаг 3. Решает MILP на J.
-    При несовместности откатывает последний батч и увеличивает K.
     Возвращает (x_full, obj) или (None, None).
     """
     x_full, obj = solve_milp(I, J, x_fixed)
@@ -284,7 +290,9 @@ def run_algorithm(k_thresh=K_THRESH, eps=EPS):
     x_fixed = np.zeros(N)
 
     # Шаг 0: начальное округление (came_from='start')
-    status, I, J, x_fixed, action = rounding_step(I, J, x_fixed, came_from='start', eps=eps)
+    status, I, J, x_fixed, action = rounding_step(
+        I, J, x_fixed, came_from='start', eps=eps, k_thresh=k_thresh
+    )
     if status == 'return_true':
         return x_fixed, c @ x_fixed
     if status == 'fail':
@@ -304,7 +312,9 @@ def run_algorithm(k_thresh=K_THRESH, eps=EPS):
                 return None, None
             continue
         if action == 'step1':
-            status, I, J, x_fixed, action = rounding_step(I, J, x_fixed, came_from='step2', eps=eps)
+            status, I, J, x_fixed, action = rounding_step(
+                I, J, x_fixed, came_from='step2', eps=eps, k_thresh=k_thresh
+            )
             if status == 'return_true':
                 return x_fixed, c @ x_fixed
             if status == 'fail':
@@ -340,8 +350,12 @@ def run_all():
     t_milp = time() - t0
     val_milp = c @ res_milp.x
 
+    lp_gap = (
+        (val_lp - val_milp) / abs(val_milp) * 100
+        if abs(val_milp) > 1e-12 else None
+    )
     results.append({'Алгоритм': 'LP-релаксация', 'Значение': val_lp, 'Время': t_lp,
-                    'Разрыв %': (val_milp - val_lp) / abs(val_milp) * 100})
+                    'Разрыв %': lp_gap})
     results.append({'Алгоритм': 'Прямое MILP', 'Значение': val_milp, 'Время': t_milp,
                     'Разрыв %': 0.0})
 
@@ -350,7 +364,10 @@ def run_all():
     x_alg, val_alg = run_algorithm()
     t_alg = time() - t0
     if val_alg is not None:
-        gap = (val_milp - val_alg) / abs(val_milp) * 100
+        gap = (
+            (val_milp - val_alg) / abs(val_milp) * 100
+            if abs(val_milp) > 1e-12 else None
+        )
     else:
         gap = None
     results.append({'Алгоритм': 'Шаги 0–3 (наш)', 'Значение': val_alg, 'Время': t_alg,
