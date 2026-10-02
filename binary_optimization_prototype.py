@@ -2,6 +2,15 @@ import numpy as np
 from scipy.optimize import linprog, milp, Bounds, LinearConstraint
 from time import time
 import pandas as pd
+import scipy.sparse as sp
+
+# HiGHS напрямую (pip install highspy): персистентная модель с warm start базиса.
+try:
+    import highspy as _hs
+    _Highs = _hs.Highs
+except ImportError:   # запасной вариант: то же ядро HiGHS, встроенное в scipy
+    from scipy.optimize._highspy import _core as _hs
+    _Highs = _hs._Highs
 
 
 # ============================================================
@@ -44,10 +53,7 @@ MAX_ITER = 1000               # предохранитель от зацикли
 SEED = 0                      # seed для случайных знаков σ_i и возмущений
 VERBOSE = False
 
-# --- Параметры warm start ---
-WARM_START = True             # включить warm start для LP
-WARM_PRESOLVE = False          # presolve=False при warm start (убирает overhead)
-WARM_METHOD = 'highs-ds'      # dual simplex для ре-решений
+# --- Параметры MILP ---
 MILP_WARM_START = True        # добавлять отсечение по лучшему решению в MILP
 OBJ_CUT_TOL = 1e-6            # допуск для отсечения по целевой
 
@@ -58,7 +64,7 @@ STATS = {}
 def reset_stats():
     STATS.clear()
     STATS.update({'lp': 0, 'milp': 0, 'perturb': 0, 'dive': 0, 'backtrack': 0,
-                  'best_updates': 0, 'warm_lp': 0, 'milp_warm': 0})
+                  'best_updates': 0, 'lp_iters': 0, 'milp_warm': 0})
 
 
 def log(*args):
@@ -136,54 +142,75 @@ best = BestSolution()
 
 
 # ============================================================
-# Warm start для LP: dual simplex + отключение presolve
+# Персистентная LP-модель (HiGHS): настоящий warm start
 # ============================================================
-class WarmStartCache:
-    """Кэш для warm start LP-решений.
+class HighsLP:
+    """Одна LP-модель на всех N столбцах, живущая весь прогон алгоритма.
 
-    scipy.linprog не передаёт warm start (базис) в HiGHS напрямую.
-    Используется комбинированный подход:
-      - method='highs-ds' (двойственный симплекс) для ре-решений — естественно
-        быстрее, когда меняется только целевая функция (как в penalty_step),
-        т.к. текущий базис остаётся двойственно-допустимым;
-      - presolve=False для ре-решений — убирает накладные расходы на
-        препроцессинг, когда структура задачи уже известна;
-      - для нового набора переменных (фиксация в Шаге 1) — полный решатель
-        с presolve=True.
+    Фиксация переменной (Шаги 0–1, 2′) — это смена границ столбца
+    lo = up = значение; снятие фиксации (откат) — возврат к [0, 1];
+    штраф Шага 2 — смена коэффициентов целевой функции. Матрица и
+    правые части не пересобираются, а HiGHS сам стартует со старого базиса:
+      - после смены границ базис остаётся двойственно допустимым
+        (двойственный симплекс);
+      - после смены целевой функции базис остаётся прямо допустимым
+        (прямой симплекс). Выбор метода HiGHS делает сам.
+    Presolve включён только для самого первого (холодного) решения:
+    при наличии валидного базиса он только мешает.
+    Ограничения lb <= Ax <= ub передаются как есть (M строк, а не 2M).
     """
 
     def __init__(self):
-        self.enabled = WARM_START
-        self.last_J_key = None
-        self.last_x_J = None
-        self.n_warm = 0
+        self.h = _Highs()
+        self.h.setOptionValue('output_flag', False)
+        lp = _hs.HighsLp()
+        S = sp.csc_matrix(A)
+        lp.num_col_, lp.num_row_ = N, M
+        lp.col_cost_ = c_min.copy()
+        lp.col_lower_ = np.zeros(N)
+        lp.col_upper_ = np.ones(N)
+        lp.row_lower_ = lb_constr.astype(float).copy()
+        lp.row_upper_ = ub_constr.astype(float).copy()
+        lp.a_matrix_.format_ = _hs.MatrixFormat.kColwise
+        lp.a_matrix_.start_ = S.indptr
+        lp.a_matrix_.index_ = S.indices
+        lp.a_matrix_.value_ = S.data
+        self.h.passModel(lp)
+        self.lo = np.zeros(N)       # текущие границы столбцов в модели
+        self.up = np.ones(N)
+        self.cost = c_min.copy()    # текущие коэффициенты целевой функции
+        self.cold = True
 
-    def get_options(self, I, J, mod_c=None):
-        """Возвращает (method, options) для linprog.
+    def solve(self, I_arr, J_arr, x_fixed, obj_J):
+        """Фиксирует I (по значениям x_fixed), освобождает остальные,
+        задаёт целевую c_min (с заменой на obj_J на J) и решает LP.
+        Возвращает (успех, вектор x длины N)."""
+        lo = np.zeros(N)
+        up = np.ones(N)
+        if len(I_arr):
+            lo[I_arr] = up[I_arr] = x_fixed[I_arr]
+        ch = np.flatnonzero((lo != self.lo) | (up != self.up)).astype(np.int32)
+        if len(ch):
+            self.h.changeColsBounds(len(ch), ch, lo[ch], up[ch])
+            self.lo, self.up = lo, up
 
-        Если множество J совпадает с предыдущим решением и изменена
-        только целевая функция (mod_c задан) — идеальный сценарий
-        для dual simplex без presolve.
-        """
-        J_key = frozenset(J) if J else frozenset()
+        cost = c_min.copy()
+        cost[J_arr] = obj_J
+        ch = np.flatnonzero(cost != self.cost).astype(np.int32)
+        if len(ch):
+            self.h.changeColsCost(len(ch), ch, cost[ch])
+            self.cost = cost
 
-        if (self.enabled and self.last_J_key is not None
-                and self.last_J_key == J_key and mod_c is not None):
-            self.n_warm += 1
-            STATS['warm_lp'] += 1
-            return WARM_METHOD, {'presolve': WARM_PRESOLVE}
-
-        return 'highs', {'presolve': True}
-
-    def update(self, x_J, J):
-        """Обновляет кэш после успешного LP-решения."""
-        if x_J is not None:
-            self.last_J_key = frozenset(J) if J else frozenset()
-            self.last_x_J = x_J.copy()
+        self.h.setOptionValue('presolve', 'on' if self.cold else 'off')
+        self.cold = False
+        self.h.run()
+        STATS['lp_iters'] += int(self.h.getInfo().simplex_iteration_count)
+        if self.h.getModelStatus() != _hs.HighsModelStatus.kOptimal:
+            return False, None
+        return True, np.array(self.h.getSolution().col_value)
 
 
-# Глобальный кэш
-warm_cache = WarmStartCache()
+lp_model = None   # создаётся в run_algorithm
 
 
 # ============================================================
@@ -193,9 +220,7 @@ def solve_lp(I, J, x_fixed, mod_c=None):
     """LP: min c_min[J] @ x_J + mod_c @ x_J
     при A_ub[:,J] @ x_J <= b_ub - A_ub[:,I] @ x_I,  0 <= x <= 1.
 
-    Warm start: при совпадении множества J с предыдущим решением
-    и изменённой целевой функции используется dual simplex (highs-ds)
-    с presolve=False.
+    Решается в персистентной модели HiGHS (lp_model) со старым базисом.
     Возвращает (x_full, obj) или (None, None) при недопустимости.
     """
     J_arr = np.array(sorted(J), dtype=int)
@@ -212,23 +237,14 @@ def solve_lp(I, J, x_fixed, mod_c=None):
     if mod_c is not None:
         obj = obj + mod_c
 
-    b = b_ub.copy()
-    if len(I_arr) > 0:
-        b = b - A_ub[:, I_arr] @ x_fixed[I_arr]
-
     STATS['lp'] += 1
-
-    method, options = warm_cache.get_options(I, J, mod_c)
-    res = linprog(c=obj, A_ub=A_ub[:, J_arr], b_ub=b,
-                  bounds=(0, 1), method=method, options=options)
-    if not res.success:
+    ok, x = lp_model.solve(I_arr, J_arr, x_fixed, obj)
+    if not ok:
         return None, None
 
     x_full = x_fixed.copy()
-    x_full[J_arr] = res.x
-
-    warm_cache.update(res.x, set(J_arr))
-    return x_full, float(res.fun)
+    x_full[J_arr] = x[J_arr]
+    return x_full, float(obj @ x[J_arr])
 
 
 def solve_milp(I, J, x_fixed, obj_bound=None):
@@ -384,9 +400,8 @@ def rounding_step(st, label, eps=EPS, k_thresh=K_THRESH):
 def penalty_step(st, eps=EPS):
     """Шаг 2. Решает (LP-3) с линеаризованным штрафом.
 
-    Warm start: при последовательных LP с одним и тем же множеством J
-    (изменяется только целевая функция) используется dual simplex
-    с presolve=False.
+    Меняется только целевая функция при тех же фиксациях, поэтому
+    каждый LP-3 стартует с базиса предыдущего решения.
 
     Возвращает:
       'candidates' — появились почти бинарные переменные (st.x_bar обновлён,
@@ -531,11 +546,13 @@ def run_algorithm(k_thresh=K_THRESH, eps=EPS, seed=SEED):
     info: z_lp — LP-граница, gap — оценка отклонения от оптимума,
           stats, best_source — источник лучшего решения.
     """
-    global rng, best, warm_cache
+    global rng, best, lp_model, RHO_0, RHO_MAX
     rng = np.random.default_rng(seed)
     reset_stats()
     best = BestSolution()
-    warm_cache = WarmStartCache()
+    RHO_0 = RHO_HAT * np.max(np.abs(c_min))   # масштаб штрафа от текущей c
+    RHO_MAX = 1e6 * RHO_0
+    lp_model = HighsLP()
     info = {'z_lp': None, 'gap': None, 'stats': STATS, 'best_source': None}
 
     # Шаг 0: LP-релаксация, нижняя граница z_LP
@@ -659,7 +676,7 @@ def run_all():
         print(f"  gap к LP-границе: {gap_lp:.2f}%")
         print(f"  Источник решения: {info.get('best_source', '?')}")
     print(f"  Статистика: {info['stats']}")
-    print(f"  Warm start LP: {warm_cache.n_warm} раз использован dual simplex")
+    print(f"  LP: {info['stats']['lp']} решений, {info['stats']['lp_iters']} итераций симплекса")
     return df
 
 
