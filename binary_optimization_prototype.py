@@ -752,32 +752,32 @@ def run_algorithm(k_thresh=K_THRESH, eps=EPS, seed=SEED):
 # ============================================================
 # Подмена данных задачи и пример стагнации
 # ============================================================
-def set_problem(c_new, A_new, lb_new, ub_new):
-    global N, M, c, A, lb_constr, ub_constr, c_min, A_ub, b_ub
-    c = np.asarray(c_new, dtype=float)
-    A = np.asarray(A_new, dtype=float)
-    lb_constr = np.asarray(lb_new, dtype=float)
-    ub_constr = np.asarray(ub_new, dtype=float)
-    M, N = A.shape
-    c_min = -c
-    A_ub = np.vstack([A, -A])
-    b_ub = np.concatenate([ub_constr, -lb_constr])
+# def set_problem(c_new, A_new, lb_new, ub_new):
+#     global N, M, c, A, lb_constr, ub_constr, c_min, A_ub, b_ub
+#     c = np.asarray(c_new, dtype=float)
+#     A = np.asarray(A_new, dtype=float)
+#     lb_constr = np.asarray(lb_new, dtype=float)
+#     ub_constr = np.asarray(ub_new, dtype=float)
+#     M, N = A.shape
+#     c_min = -c
+#     A_ub = np.vstack([A, -A])
+#     b_ub = np.concatenate([ub_constr, -lb_constr])
 
 
-def demo_stagnation(k_thresh=0):
-    global K_MAX
-    saved = (c, A, lb_constr, ub_constr, K_MAX)
-    set_problem(c_new=[-1.0, -2.0], A_new=[[1.0, 1.0]], lb_new=[1.3], ub_new=[2.0])
-    K_MAX = k_thresh
-    try:
-        x, val, info = run_algorithm(k_thresh=k_thresh)
-    finally:
-        set_problem(*saved[:4])
-        K_MAX = saved[4]
-    print("Пример стагнации (замечания 3-4):")
-    print(f"  решение: {None if x is None else x.tolist()}, c@x = {val}")
-    print(f"  статистика: {info['stats']}")
-    return x, val, info
+# def demo_stagnation(k_thresh=0):
+#     global K_MAX
+#     saved = (c, A, lb_constr, ub_constr, K_MAX)
+#     set_problem(c_new=[-1.0, -2.0], A_new=[[1.0, 1.0]], lb_new=[1.3], ub_new=[2.0])
+#     K_MAX = k_thresh
+#     try:
+#         x, val, info = run_algorithm(k_thresh=k_thresh)
+#     finally:
+#         set_problem(*saved[:4])
+#         K_MAX = saved[4]
+#     print("Пример стагнации (замечания 3-4):")
+#     print(f"  решение: {None if x is None else x.tolist()}, c@x = {val}")
+#     print(f"  статистика: {info['stats']}")
+#     return x, val, info
 
 
 # ============================================================
@@ -820,7 +820,7 @@ def run_all():
 
     df = pd.DataFrame(results)
     print("=" * 75)
-    print(f"  ЗАДАЧА: N={N}, M={M},  max c@x,  0 <= Ax <= 100,  x in {{0,1}}")
+    print(f"  ЗАДАЧА: N={N}, M={M},  K={K_THRESH}, max c@x,  0 <= Ax <= 100,  x in {{0,1}}")
     print("=" * 75)
     print(df.to_string(index=False))
     print("=" * 75)
@@ -847,9 +847,8 @@ if __name__ == '__main__':
     LOG_ENABLED = False
     run_all()
     print()
-    demo_stagnation()
 
     print("\n\n=== LOG_ENABLED = True (детальный лог, тест стагнации) ===")
     LOG_ENABLED = True
-    demo_stagnation()
-    LOG_ENABLED = False
+    x_alg, val_alg, info = run_algorithm()
+    print()
